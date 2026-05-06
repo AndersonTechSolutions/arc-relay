@@ -294,6 +294,172 @@ func TestDashboardUpstreamForm_BadCSRF(t *testing.T) {
 	}
 }
 
+// TestDashboardMetaForm_VisibilityFlip: POST /skills/{slug}/meta flips
+// visibility from public to restricted and redirects back to the detail page.
+func TestDashboardMetaForm_VisibilityFlip(t *testing.T) {
+	d := newDashRig(t)
+	sk := d.seedSkill(t, "meta-flip")
+	if sk.Visibility != "public" {
+		t.Fatalf("seed visibility = %q, want public", sk.Visibility)
+	}
+
+	form := url.Values{
+		"display_name": {sk.DisplayName},
+		"description":  {sk.Description},
+		"visibility":   {"restricted"},
+	}
+	req := d.adminReq(t, "POST", "/skills/meta-flip/meta", form)
+	rw := httptest.NewRecorder()
+	d.h.HandleSkillRoutes(rw, req)
+
+	if rw.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body=%s", rw.Code, rw.Body.String())
+	}
+	if got := rw.Header().Get("Location"); got != "/skills/meta-flip" {
+		t.Errorf("Location = %q", got)
+	}
+	post, _ := d.store.GetSkillBySlug("meta-flip")
+	if post == nil || post.Visibility != "restricted" {
+		t.Errorf("Visibility after POST = %v, want restricted", post)
+	}
+}
+
+// TestDashboardMetaForm_RenameAndDescribe: POST patches both display_name
+// and description in one shot.
+func TestDashboardMetaForm_RenameAndDescribe(t *testing.T) {
+	d := newDashRig(t)
+	sk := d.seedSkill(t, "meta-rename")
+
+	form := url.Values{
+		"display_name": {"Renamed Skill"},
+		"description":  {"Now with extra context"},
+		"visibility":   {sk.Visibility},
+	}
+	req := d.adminReq(t, "POST", "/skills/meta-rename/meta", form)
+	rw := httptest.NewRecorder()
+	d.h.HandleSkillRoutes(rw, req)
+
+	if rw.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body=%s", rw.Code, rw.Body.String())
+	}
+	post, _ := d.store.GetSkillBySlug("meta-rename")
+	if post == nil {
+		t.Fatal("skill missing after POST")
+	}
+	if post.DisplayName != "Renamed Skill" {
+		t.Errorf("DisplayName = %q", post.DisplayName)
+	}
+	if post.Description != "Now with extra context" {
+		t.Errorf("Description = %q", post.Description)
+	}
+}
+
+// TestDashboardMetaForm_EmptyDisplayNameRejected: empty display_name
+// re-renders the detail page with the error rather than redirecting.
+func TestDashboardMetaForm_EmptyDisplayNameRejected(t *testing.T) {
+	d := newDashRig(t)
+	d.seedSkill(t, "meta-empty-name")
+
+	form := url.Values{
+		"display_name": {"   "},
+		"description":  {"x"},
+		"visibility":   {"public"},
+	}
+	req := d.adminReq(t, "POST", "/skills/meta-empty-name/meta", form)
+	rw := httptest.NewRecorder()
+	d.h.HandleSkillRoutes(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (re-render); body=%s", rw.Code, rw.Body.String())
+	}
+	if !strings.Contains(rw.Body.String(), "Display name is required") {
+		t.Errorf("body missing error message; body=%s", rw.Body.String())
+	}
+}
+
+// TestDashboardMetaForm_BadVisibility: invalid visibility re-renders the
+// detail page with the error rather than redirecting.
+func TestDashboardMetaForm_BadVisibility(t *testing.T) {
+	d := newDashRig(t)
+	d.seedSkill(t, "meta-bad-vis")
+
+	form := url.Values{
+		"display_name": {"X"},
+		"description":  {""},
+		"visibility":   {"halfway"},
+	}
+	req := d.adminReq(t, "POST", "/skills/meta-bad-vis/meta", form)
+	rw := httptest.NewRecorder()
+	d.h.HandleSkillRoutes(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (re-render); body=%s", rw.Code, rw.Body.String())
+	}
+	if !strings.Contains(rw.Body.String(), "Visibility must be public or restricted") {
+		t.Errorf("body missing error message; body=%s", rw.Body.String())
+	}
+}
+
+// TestDashboardMetaForm_NonAdminForbidden: regular users get 403 from the
+// existing requireAdmin gate before the meta handler runs.
+func TestDashboardMetaForm_NonAdminForbidden(t *testing.T) {
+	d := newDashRig(t)
+	d.seedSkill(t, "meta-gate")
+	regular, err := d.users.Create("alice-meta", "pw", "user")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	sid := "alice-meta-session"
+	form := url.Values{
+		"csrf_token":   {d.h.csrfToken(sid)},
+		"display_name": {"Hijacked"},
+		"description":  {""},
+		"visibility":   {"public"},
+	}
+	req := httptest.NewRequest("POST", "/skills/meta-gate/meta",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	ctx := setUser(req.Context(), regular)
+	ctx = setSessionID(ctx, sid)
+	req = req.WithContext(ctx)
+
+	rw := httptest.NewRecorder()
+	d.h.HandleSkillRoutes(rw, req)
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestDashboardSkillDetail_RendersEditMetaCard: a GET as admin shows the
+// "Edit metadata" admin card with the form pointed at the meta endpoint.
+func TestDashboardSkillDetail_RendersEditMetaCard(t *testing.T) {
+	d := newDashRig(t)
+	sk := d.seedSkill(t, "meta-render")
+
+	req := d.adminReq(t, "GET", "/skills/meta-render", nil)
+	rw := httptest.NewRecorder()
+	d.h.HandleSkillRoutes(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rw.Code, rw.Body.String())
+	}
+	body := rw.Body.String()
+	if !strings.Contains(body, "Edit metadata") {
+		t.Errorf("detail page missing Edit metadata card")
+	}
+	if !strings.Contains(body, `action="/skills/meta-render/meta"`) {
+		t.Errorf("detail page missing meta form action")
+	}
+	if !strings.Contains(body, `name="visibility"`) {
+		t.Errorf("detail page missing visibility select")
+	}
+	// The current visibility should be pre-selected.
+	wantSelected := `value="` + sk.Visibility + `"`
+	if !strings.Contains(body, wantSelected) {
+		t.Errorf("detail page should pre-select current visibility %q", sk.Visibility)
+	}
+}
+
 // TestDashboardSkillDetail_RendersAdminForm_NoUpstream: a GET on the detail
 // page when no upstream is configured renders the admin "enable tracking"
 // form. Smoke check that the template branch we changed actually emits.

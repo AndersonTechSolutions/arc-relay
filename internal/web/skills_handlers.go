@@ -181,6 +181,14 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 		switch r.Method {
 		case http.MethodGet:
 			h.getSkill(w, skill)
+		case http.MethodPatch:
+			// Same gate as version uploads — admin or skills:write capability.
+			// Flipping visibility is a publish-decision, not a routine action,
+			// so admin issuance keeps it deliberate.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:write") {
+				return
+			}
+			h.patchSkill(w, r, skill)
 		case http.MethodDelete:
 			if user.Role != "admin" {
 				writeJSONError(w, http.StatusForbidden, "admin access required")
@@ -491,6 +499,100 @@ func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, s
 		*skills.UploadResult
 		UpstreamRecorded bool `json:"upstream_recorded"`
 	}{res, upstreamRecorded})
+}
+
+// patchSkillBody is the wire shape for PATCH /api/skills/{slug}. Every field
+// is a pointer so the handler can distinguish "field omitted" (no change)
+// from "field set to empty string" (would be a validation error). JSON
+// unmarshal sets the pointer for any key present in the body, even if its
+// value is null — callers should leave the key out entirely to skip it.
+type patchSkillBody struct {
+	Visibility  *string `json:"visibility,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+// patchSkill implements PATCH /api/skills/{slug}. Partial-update semantics:
+// any field present in the JSON body is applied; absent fields are kept.
+// Visibility transitions are explicit because they affect the read-side ACL
+// (every assigned user gains/loses access), so we don't accept empty/unknown
+// values silently — they 400 instead.
+//
+// Status codes:
+//
+//	200 — patch applied; body is the updated skill
+//	400 — malformed JSON, unknown visibility, or empty body
+//	405 — non-PATCH (handled by the caller)
+//	415 — wrong Content-Type
+func (h *SkillsHandlers) patchSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+	ct := r.Header.Get("Content-Type")
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if !strings.EqualFold(ct, "application/json") {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "expected application/json")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "body unreadable")
+		return
+	}
+	var in patchSkillBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if in.Visibility == nil && in.DisplayName == nil && in.Description == nil {
+		writeJSONError(w, http.StatusBadRequest, "patch body must include at least one of visibility, display_name, description")
+		return
+	}
+
+	// Apply each provided field on top of the in-memory skill, then write the
+	// whole record back through UpdateSkillMeta. The store method overwrites
+	// display_name + description unconditionally and uses NULLIF on visibility,
+	// so by passing the existing values for omitted fields we preserve them.
+	displayName := skill.DisplayName
+	description := skill.Description
+	visibility := "" // empty = "leave unchanged" per UpdateSkillMeta semantics
+
+	if in.DisplayName != nil {
+		dn := strings.TrimSpace(*in.DisplayName)
+		if dn == "" {
+			writeJSONError(w, http.StatusBadRequest, "display_name cannot be empty")
+			return
+		}
+		displayName = dn
+	}
+	if in.Description != nil {
+		// Description is allowed to be empty — clearing it is a valid action.
+		description = *in.Description
+	}
+	if in.Visibility != nil {
+		v := strings.TrimSpace(*in.Visibility)
+		if v != "public" && v != "restricted" {
+			writeJSONError(w, http.StatusBadRequest, `visibility must be "public" or "restricted"`)
+			return
+		}
+		visibility = v
+	}
+
+	if err := h.store.UpdateSkillMeta(skill.ID, displayName, description, visibility); err != nil {
+		slog.Warn("skills patch", "slug", skill.Slug, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	updated, err := h.store.GetSkillBySlug(skill.Slug)
+	if err != nil || updated == nil {
+		slog.Warn("skills patch: re-read", "slug", skill.Slug, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"skill": updated})
 }
 
 func (h *SkillsHandlers) deleteSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill) {

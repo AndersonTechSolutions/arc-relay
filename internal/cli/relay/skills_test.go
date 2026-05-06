@@ -1,8 +1,10 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -294,6 +296,116 @@ func TestClearUpstream_404(t *testing.T) {
 	}
 	if httpErr.Status != http.StatusNotFound {
 		t.Errorf("Status = %d", httpErr.Status)
+	}
+}
+
+// TestPatchSkill_RoundTrip verifies the PATCH shape end-to-end: PATCH method,
+// /api/skills/{slug} path, application/json content type, body shape, and
+// the wrapped {"skill":...} response.
+func TestPatchSkill_RoundTrip(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotCT     string
+		gotBody   map[string]any
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotCT = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"skill": map[string]any{
+				"id":           "id-123",
+				"slug":         "foo",
+				"display_name": "Renamed",
+				"description":  "",
+				"visibility":   "public",
+				"created_at":   "2026-04-30T00:00:00Z",
+				"updated_at":   "2026-05-06T17:00:00Z",
+			},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	v := "public"
+	dn := "Renamed"
+	updated, err := c.PatchSkill("foo", &PatchSkillInput{Visibility: &v, DisplayName: &dn})
+	if err != nil {
+		t.Fatalf("PatchSkill: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/api/skills/foo" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q", gotCT)
+	}
+	if gotBody["visibility"] != "public" {
+		t.Errorf("body visibility = %v", gotBody["visibility"])
+	}
+	if gotBody["display_name"] != "Renamed" {
+		t.Errorf("body display_name = %v", gotBody["display_name"])
+	}
+	if updated == nil || updated.Visibility != "public" || updated.DisplayName != "Renamed" {
+		t.Errorf("updated = %+v", updated)
+	}
+}
+
+// TestPatchSkill_OmitsAbsentFields verifies that nil-pointer fields don't
+// leak into the JSON body — important so partial updates don't silently
+// blank server-side values via "" coercion.
+func TestPatchSkill_OmitsAbsentFields(t *testing.T) {
+	var rawBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"skill": map[string]any{
+				"id": "id-123", "slug": "foo", "visibility": "public",
+				"display_name": "x", "description": "",
+				"created_at": "2026-04-30T00:00:00Z",
+				"updated_at": "2026-05-06T17:00:00Z",
+			},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	v := "public"
+	if _, err := c.PatchSkill("foo", &PatchSkillInput{Visibility: &v}); err != nil {
+		t.Fatalf("PatchSkill: %v", err)
+	}
+	if !bytes.Contains(rawBody, []byte(`"visibility":"public"`)) {
+		t.Errorf("body should contain visibility; got %s", rawBody)
+	}
+	if bytes.Contains(rawBody, []byte("display_name")) {
+		t.Errorf("body should NOT contain display_name when nil; got %s", rawBody)
+	}
+	if bytes.Contains(rawBody, []byte("description")) {
+		t.Errorf("body should NOT contain description when nil; got %s", rawBody)
+	}
+}
+
+// TestPatchSkill_400 surfaces a SkillHTTPError on validation failure.
+func TestPatchSkill_400(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "visibility must be public/restricted"})
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	v := "halfway"
+	_, err := c.PatchSkill("foo", &PatchSkillInput{Visibility: &v})
+	if err == nil {
+		t.Fatal("expected error on 400")
+	}
+	var httpErr *SkillHTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusBadRequest {
+		t.Errorf("expected SkillHTTPError 400, got %T %v", err, err)
 	}
 }
 

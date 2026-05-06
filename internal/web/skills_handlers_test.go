@@ -1319,6 +1319,233 @@ func TestSkillsHandlers_ListSkills_MixedDrift(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// PATCH /api/skills/{slug}  (skill metadata edit — visibility/display/description)
+// ---------------------------------------------------------------------------
+
+func TestSkillsHandlers_PatchSkill_VisibilityFlip(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"visibility":"public"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	got, _ := rig.store.GetSkillBySlug("demo-skill")
+	if got == nil || got.Visibility != "public" {
+		t.Errorf("Visibility after PATCH = %v, want public", got)
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_DisplayAndDescription(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	body := `{"display_name":"Demo Skill (Renamed)","description":"Now with more docs"}`
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	got, _ := rig.store.GetSkillBySlug("demo-skill")
+	if got == nil {
+		t.Fatal("skill missing after PATCH")
+	}
+	if got.DisplayName != "Demo Skill (Renamed)" {
+		t.Errorf("DisplayName = %q", got.DisplayName)
+	}
+	if got.Description != "Now with more docs" {
+		t.Errorf("Description = %q", got.Description)
+	}
+	if got.Visibility != "public" {
+		t.Errorf("Visibility unexpectedly changed to %q (should still be public)", got.Visibility)
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_PartialPreservesOtherFields(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	pre, _ := rig.store.GetSkillBySlug("demo-skill")
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"visibility":"restricted"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	post, _ := rig.store.GetSkillBySlug("demo-skill")
+	if post.DisplayName != pre.DisplayName {
+		t.Errorf("DisplayName changed: %q → %q", pre.DisplayName, post.DisplayName)
+	}
+	if post.Description != pre.Description {
+		t.Errorf("Description changed: %q → %q", pre.Description, post.Description)
+	}
+	if post.Visibility != "restricted" {
+		t.Errorf("Visibility = %q, want restricted", post.Visibility)
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_BadVisibility(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	for _, v := range []string{`"unknown"`, `""`, `"PUBLIC"`} {
+		req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+			strings.NewReader(`{"visibility":`+v+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		rw := httptest.NewRecorder()
+		rig.mux.ServeHTTP(rw, req)
+		if rw.Code != http.StatusBadRequest {
+			t.Errorf("visibility=%s = %d, want 400; body=%s", v, rw.Code, rw.Body.String())
+		}
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_EmptyDisplayNameRejected(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"display_name":"   "}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusBadRequest {
+		t.Errorf("empty display_name = %d, want 400; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_EmptyBody(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusBadRequest {
+		t.Errorf("empty body = %d, want 400; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_BadContentType(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`visibility=public`))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("form-encoded = %d, want 415; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_404Unknown(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	req := httptest.NewRequest("PATCH", "/api/skills/ghost",
+		strings.NewReader(`{"visibility":"public"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("PATCH ghost = %d, want 404; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_403NonAdminNoCap(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	rig.userToInject = rig.regularUser(t, "alice")
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"visibility":"restricted"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("non-admin no-cap = %d, want 403; body=%s", rw.Code, rw.Body.String())
+	}
+	if !strings.Contains(rw.Body.String(), "skills:write") {
+		t.Errorf("403 body should name the missing capability; got %s", rw.Body.String())
+	}
+}
+
+func TestSkillsHandlers_PatchSkill_PassWithCapKey(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	rig.userToInject = rig.regularUser(t, "ci-user")
+	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:write"}}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"visibility":"public"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Errorf("cap key PATCH = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
 // PUT/DELETE /api/skills/{slug}/upstream  (skill set-upstream design)
 // ---------------------------------------------------------------------------
 

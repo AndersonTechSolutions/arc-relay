@@ -281,6 +281,103 @@ func TestClearUpstream_HappyPath(t *testing.T) {
 	}
 }
 
+// fakeEditClient stubs editClient for the `skill edit` tests.
+type fakeEditClient struct {
+	gotSlug string
+	gotIn   *relay.PatchSkillInput
+	resp    *relay.Skill
+	err     error
+}
+
+func (f *fakeEditClient) PatchSkill(slug string, in *relay.PatchSkillInput) (*relay.Skill, error) {
+	f.gotSlug = slug
+	f.gotIn = in
+	return f.resp, f.err
+}
+
+func TestEditSkill_VisibilityFlip(t *testing.T) {
+	c := &fakeEditClient{
+		resp: &relay.Skill{Slug: "foo", Visibility: "public", DisplayName: "Foo"},
+	}
+	v := "public"
+	in := &relay.PatchSkillInput{Visibility: &v}
+
+	var stdout, stderr bytes.Buffer
+	if err := editSkill(c, "foo", in, &stdout, &stderr); err != nil {
+		t.Fatalf("editSkill: %v", err)
+	}
+	if c.gotSlug != "foo" {
+		t.Errorf("slug arg = %q", c.gotSlug)
+	}
+	if c.gotIn == nil || c.gotIn.Visibility == nil || *c.gotIn.Visibility != "public" {
+		t.Errorf("PatchSkillInput.Visibility = %+v", c.gotIn)
+	}
+	if !strings.Contains(stdout.String(), "Updated foo: visibility=public") {
+		t.Errorf("stdout missing summary: %q", stdout.String())
+	}
+}
+
+func TestEditSkill_DisplayName(t *testing.T) {
+	c := &fakeEditClient{
+		resp: &relay.Skill{Slug: "foo", Visibility: "restricted", DisplayName: "Renamed"},
+	}
+	dn := "Renamed"
+	in := &relay.PatchSkillInput{DisplayName: &dn}
+
+	var stdout, stderr bytes.Buffer
+	if err := editSkill(c, "foo", in, &stdout, &stderr); err != nil {
+		t.Fatalf("editSkill: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `display="Renamed"`) {
+		t.Errorf("stdout missing display rename: %q", stdout.String())
+	}
+}
+
+func TestEditSkill_400(t *testing.T) {
+	c := &fakeEditClient{err: &relay.SkillHTTPError{Status: http.StatusBadRequest}}
+	v := "halfway"
+	in := &relay.PatchSkillInput{Visibility: &v}
+
+	var stdout, stderr bytes.Buffer
+	err := editSkill(c, "foo", in, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 400")
+	}
+	if !strings.Contains(stderr.String(), "bad request") {
+		t.Errorf("stderr missing 400 message: %q", stderr.String())
+	}
+}
+
+func TestEditSkill_404(t *testing.T) {
+	c := &fakeEditClient{err: &relay.SkillHTTPError{Status: http.StatusNotFound}}
+	v := "public"
+	in := &relay.PatchSkillInput{Visibility: &v}
+
+	var stdout, stderr bytes.Buffer
+	err := editSkill(c, "ghost", in, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	if !strings.Contains(stderr.String(), "ghost: not found on relay") {
+		t.Errorf("stderr missing 404 message: %q", stderr.String())
+	}
+}
+
+func TestEditSkill_403(t *testing.T) {
+	c := &fakeEditClient{err: &relay.SkillHTTPError{Status: http.StatusForbidden}}
+	v := "public"
+	in := &relay.PatchSkillInput{Visibility: &v}
+
+	var stdout, stderr bytes.Buffer
+	err := editSkill(c, "foo", in, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 403")
+	}
+	if !strings.Contains(stderr.String(), "admin role or skills:write API key required") {
+		t.Errorf("stderr missing 403 hint: %q", stderr.String())
+	}
+}
+
 func TestClearUpstream_404(t *testing.T) {
 	c := &fakeUpstreamClient{
 		clearErr: &relay.SkillHTTPError{Status: http.StatusNotFound},
@@ -323,5 +420,8 @@ func TestPrintSkillUsage_MentionsCheckUpdates(t *testing.T) {
 	}
 	if !strings.Contains(captured.String(), "clear-upstream") {
 		t.Errorf("printSkillUsage output missing clear-upstream: %q", captured.String())
+	}
+	if !strings.Contains(captured.String(), "edit <slug>") {
+		t.Errorf("printSkillUsage output missing edit subcommand: %q", captured.String())
 	}
 }

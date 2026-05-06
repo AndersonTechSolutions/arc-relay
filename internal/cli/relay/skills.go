@@ -346,6 +346,53 @@ func (c *Client) YankSkill(slug string, hard bool) error {
 	return nil
 }
 
+// PatchSkillInput is the body posted to PATCH /api/skills/{slug} by the
+// `arc-sync skill edit` subcommand. Each field is a pointer so the caller can
+// distinguish "omit" (skip) from "explicitly set to empty string". The relay
+// rejects empty Visibility / DisplayName but accepts an empty Description as
+// "clear the description".
+type PatchSkillInput struct {
+	Visibility  *string `json:"visibility,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+// PatchSkill calls PATCH /api/skills/{slug}. Used by `arc-sync skill edit`
+// to flip visibility (public ↔ restricted) or rewrite display_name /
+// description without re-uploading a version. Returns the updated skill.
+func (c *Client) PatchSkill(slug string, in *PatchSkillInput) (*Skill, error) {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	endpoint := "/api/skills/" + url.PathEscape(slug)
+	req, err := http.NewRequest(http.MethodPatch, c.BaseURL+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &SkillHTTPError{
+			Status: resp.StatusCode,
+			err:    handleErrorResponse(resp, respBody, fmt.Sprintf("skill %q patch", slug)),
+		}
+	}
+	var wrap struct {
+		Skill *Skill `json:"skill"`
+	}
+	if err := json.Unmarshal(respBody, &wrap); err != nil {
+		return nil, fmt.Errorf("parse patch response: %w", err)
+	}
+	return wrap.Skill, nil
+}
+
 // SetUpstreamInput is the body posted to PUT /api/skills/{slug}/upstream by
 // the `arc-sync skill set-upstream` subcommand. Field names mirror the JSON
 // the relay accepts (see internal/web/skills_handlers.go's upstreamPUTBody).

@@ -277,6 +277,14 @@ func (h *Handlers) HandleSkillRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.NotFound(w, r)
+	case "meta":
+		// /skills/{slug}/meta — POST patches display_name / description /
+		// visibility from the inline "Edit metadata" admin form.
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		h.handleMetaForm(w, r, skill)
 	case "versions":
 		if len(parts) < 4 {
 			http.NotFound(w, r)
@@ -348,6 +356,83 @@ func (h *Handlers) renderSkillDetail(w http.ResponseWriter, r *http.Request, use
 		"Upstream":     upstream,
 		"Drift":        drift,
 		"UpstreamForm": map[string]string{},
+		"MetaForm":     map[string]string{},
+	})
+}
+
+// handleMetaForm processes the /skills/{slug}/meta POST emitted by the admin
+// "Edit metadata" card on the skill detail page. CSRF + admin role are
+// already enforced by HandleSkillRoutes before this is called. Validation
+// failures re-render the detail page with the typed values preserved so the
+// admin doesn't lose their work to a redirect.
+func (h *Handlers) handleMetaForm(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+	user := getUser(r)
+
+	displayName := strings.TrimSpace(r.FormValue("display_name"))
+	description := r.FormValue("description") // empty string is allowed (clears it)
+	visibility := strings.TrimSpace(r.FormValue("visibility"))
+
+	if displayName == "" {
+		h.renderSkillDetailWithMetaError(w, r, user, skill, "Display name is required.", displayName, description, visibility)
+		return
+	}
+	if visibility != "public" && visibility != "restricted" {
+		h.renderSkillDetailWithMetaError(w, r, user, skill, "Visibility must be public or restricted.", displayName, description, visibility)
+		return
+	}
+
+	if err := h.skillStore.UpdateSkillMeta(skill.ID, displayName, description, visibility); err != nil {
+		slog.Warn("update skill meta", "slug", skill.Slug, "err", err)
+		h.renderSkillDetailWithMetaError(w, r, user, skill, "Saving metadata failed: "+err.Error(), displayName, description, visibility)
+		return
+	}
+	http.Redirect(w, r, "/skills/"+skill.Slug, http.StatusFound)
+}
+
+// renderSkillDetailWithMetaError re-renders /skills/{slug} with a metadata-
+// edit error and the user's last form values.
+func (h *Handlers) renderSkillDetailWithMetaError(w http.ResponseWriter, r *http.Request, user *store.User, skill *store.Skill, msg, displayName, description, visibility string) {
+	versions, err := h.skillStore.ListVersions(skill.ID)
+	if err != nil {
+		slog.Warn("skill detail versions", "slug", skill.Slug, "err", err)
+		http.Error(w, "failed to load versions", http.StatusInternalServerError)
+		return
+	}
+	var assignments []*store.SkillAssignment
+	if user.Role == "admin" {
+		assignments, err = h.skillStore.ListAssignmentsForSkill(skill.ID)
+		if err != nil {
+			slog.Warn("skill detail assignments", "slug", skill.Slug, "err", err)
+			http.Error(w, "failed to load assignments", http.StatusInternalServerError)
+			return
+		}
+	}
+	var (
+		upstream *store.SkillUpstream
+		drift    map[string]any
+	)
+	if u, err := h.skillStore.GetUpstream(skill.ID); err == nil && u != nil {
+		upstream = u
+		if skill.Outdated == 1 {
+			drift = driftBlockFromUpstream(u)
+		}
+	}
+	h.render(w, r, "skill_detail.html", map[string]any{
+		"Nav":          "skills",
+		"User":         user,
+		"Skill":        skill,
+		"Versions":     versions,
+		"Assignments":  assignments,
+		"DownloadBase": "/api/skills/" + skill.Slug + "/versions",
+		"Upstream":     upstream,
+		"Drift":        drift,
+		"UpstreamForm": map[string]string{},
+		"MetaErr":      msg,
+		"MetaForm": map[string]string{
+			"DisplayName": displayName,
+			"Description": description,
+			"Visibility":  visibility,
+		},
 	})
 }
 

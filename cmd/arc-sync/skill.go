@@ -43,6 +43,8 @@ func runSkill() {
 		runSkillSetUpstream()
 	case "clear-upstream":
 		runSkillClearUpstream()
+	case "edit":
+		runSkillEdit()
 	case "--help", "-h", "help":
 		printSkillUsage()
 	default:
@@ -94,6 +96,13 @@ Commands:
                         Admin-only. Remove upstream tracking for a skill.
                         Future drift checker runs skip it silently and any
                         stale "outdated" flag is cleared.
+  edit <slug> [--visibility public|restricted] [--display-name TEXT] [--description TEXT]
+                        Admin-only. Patch a skill's mutable metadata in place
+                        without bumping its version. Any subset of flags can
+                        be set; omitted fields keep their current values.
+                        Visibility flip propagates immediately to the read-side
+                        ACL — restricting a public skill drops every user who
+                        had access via visibility=public.
 
 Skills install to ~/.claude/skills/<slug>/. arc-sync only touches directories
 it created (those carrying a .arc-sync-version marker file); manually-installed
@@ -412,6 +421,84 @@ func runSkillUnassign() {
 type upstreamClient interface {
 	SetUpstream(slug string, in *relay.SetUpstreamInput) (map[string]any, error)
 	ClearUpstream(slug string) error
+}
+
+// editClient narrows the relay.Client surface used by `arc-sync skill edit`.
+// Same fake-injection rationale as upstreamClient.
+type editClient interface {
+	PatchSkill(slug string, in *relay.PatchSkillInput) (*relay.Skill, error)
+}
+
+// runSkillEdit implements `arc-sync skill edit <slug> [--visibility V]
+// [--display-name TEXT] [--description TEXT]`. Each flag is optional; at
+// least one must be present.
+func runSkillEdit() {
+	args := os.Args[3:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync skill edit <slug> [--visibility public|restricted] [--display-name TEXT] [--description TEXT]")
+		os.Exit(1)
+	}
+	slug := args[0]
+	rest := args[1:]
+
+	in := &relay.PatchSkillInput{}
+	if hasFlagInArgs(rest, "--visibility") {
+		v := getFlagValue(rest, "--visibility")
+		in.Visibility = &v
+	}
+	if hasFlagInArgs(rest, "--display-name") {
+		v := getFlagValue(rest, "--display-name")
+		in.DisplayName = &v
+	}
+	if hasFlagInArgs(rest, "--description") {
+		v := getFlagValue(rest, "--description")
+		in.Description = &v
+	}
+
+	if in.Visibility == nil && in.DisplayName == nil && in.Description == nil {
+		fmt.Fprintln(os.Stderr, "skill edit: at least one of --visibility, --display-name, --description is required")
+		os.Exit(1)
+	}
+
+	mgr := newSkillManager()
+	if err := editSkill(mgr.Client, slug, in, os.Stdout, os.Stderr); err != nil {
+		os.Exit(1)
+	}
+}
+
+// editSkill is the testable core of runSkillEdit.
+func editSkill(c editClient, slug string, in *relay.PatchSkillInput, stdout, stderr io.Writer) error {
+	updated, err := c.PatchSkill(slug, in)
+	if err != nil {
+		printSkillEditError(stderr, slug, err)
+		return err
+	}
+	fmt.Fprintf(stdout, "Updated %s: visibility=%s display=%q\n",
+		updated.Slug, updated.Visibility, updated.DisplayName)
+	return nil
+}
+
+// printSkillEditError pretty-prints SkillHTTPError statuses for the edit path.
+// Mirrors printSetUpstreamError's shape so the two CLI commands feel uniform.
+func printSkillEditError(stderr io.Writer, slug string, err error) {
+	var httpErr *relay.SkillHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusBadRequest:
+			fmt.Fprintf(stderr, "skill %s: bad request — visibility must be public/restricted, display_name non-empty\n", slug)
+			return
+		case http.StatusForbidden:
+			fmt.Fprintf(stderr, "skill %s: forbidden — admin role or skills:write API key required\n", slug)
+			return
+		case http.StatusNotFound:
+			fmt.Fprintf(stderr, "skill %s: not found on relay\n", slug)
+			return
+		case http.StatusUnsupportedMediaType:
+			fmt.Fprintf(stderr, "skill %s: relay rejected request body (likely a client/server mismatch)\n", slug)
+			return
+		}
+	}
+	fmt.Fprintf(stderr, "skill %s: %s\n", slug, err)
 }
 
 // runSkillSetUpstream implements `arc-sync skill set-upstream <slug>
