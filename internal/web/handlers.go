@@ -2236,6 +2236,30 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/users", http.StatusFound)
 }
 
+// sanitizeCapabilities filters posted capability values against
+// store.SupportedCapabilities so a hand-crafted form can't smuggle in unknown
+// capability strings — keeps the issued key honest about what the relay
+// actually checks for. The store-level normalizer also dedupes/sorts, but we
+// allowlist here so any forward-compat capabilities surface as a deliberate
+// code change rather than a silent passthrough.
+func sanitizeCapabilities(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(store.SupportedCapabilities))
+	for _, c := range store.SupportedCapabilities {
+		allowed[c] = struct{}{}
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if _, ok := allowed[v]; ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // --- API Keys ---
 
 func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -2254,6 +2278,10 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 
 	data := map[string]any{
 		"Nav": "apikeys", "User": user, "Keys": keys, "Profiles": profiles,
+		// SupportedCapabilities drives the admin-only checkbox group on the
+		// create form. Non-admins see no capability picker; the handler also
+		// gates server-side so a hand-crafted POST can't grant capabilities.
+		"SupportedCapabilities": store.SupportedCapabilities,
 	}
 	// Consume one-time flash nonce to display newly created key.
 	// LoadAndDelete ensures the key is shown only once; refreshing
@@ -2293,7 +2321,18 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 				profileID = fullUser.DefaultProfileID
 			}
 		}
-		rawKey, _, err := h.users.CreateAPIKey(user.ID, name, profileID, nil)
+		// Capabilities. Admin-only at issuance time — granting `skills:write`
+		// to a non-admin's own key would let any user trivially elevate, since
+		// the capability bypasses the admin role check on the affected
+		// endpoints. Non-admins get nil here regardless of what the form
+		// posted, in case the checkboxes leak via a hand-crafted request.
+		var capabilities []string
+		if user.Role == "admin" {
+			if err := r.ParseForm(); err == nil {
+				capabilities = sanitizeCapabilities(r.Form["capability"])
+			}
+		}
+		rawKey, _, err := h.users.CreateAPIKey(user.ID, name, profileID, capabilities)
 		if err != nil {
 			slog.Error("error creating API key", "err", err)
 			http.Redirect(w, r, "/api-keys", http.StatusFound)

@@ -22,13 +22,20 @@
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Name</th><th>Profile</th><th>Created</th><th>Last Used</th><th>Status</th><th>Actions</th></tr>
+      <tr><th>Name</th><th>Profile</th><th>Capabilities</th><th>Created</th><th>Last Used</th><th>Status</th><th>Actions</th></tr>
     </thead>
     <tbody>
       {{range .Keys}}
       <tr>
         <td>{{.Name}}</td>
         <td>{{if .ProfileName}}<span class="badge badge-stdio">{{.ProfileName}}</span>{{else}}<span style="color:var(--text-muted)">None (legacy)</span>{{end}}</td>
+        <td>
+          {{if .Capabilities}}
+            {{range .Capabilities}}<span class="badge badge-stdio" style="margin-right:0.25rem;"><code>{{.}}</code></span>{{end}}
+          {{else}}
+            <span style="color:var(--text-muted)">—</span>
+          {{end}}
+        </td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>{{if .LastUsed}}{{.LastUsed.Format "2006-01-02 15:04"}}{{else}}<span style="color:var(--text-muted)">Never</span>{{end}}</td>
         <td>
@@ -77,6 +84,25 @@
         <div class="help">Override the profile for this key. Leave blank to inherit from your user profile.</div>
       </div>
     </div>
+    {{if and .User (eq .User.Role "admin")}}
+    <div class="form-group">
+      <label>Capabilities <span style="color:var(--text-muted); font-weight:normal;">(admin-only)</span></label>
+      <div style="display:flex; flex-direction:column; gap:0.35rem; margin-top:0.25rem;">
+        {{range .SupportedCapabilities}}
+        <label style="display:flex; align-items:center; gap:0.5rem; font-weight:normal;">
+          <input type="checkbox" name="capability" value="{{.}}">
+          <code>{{.}}</code>
+        </label>
+        {{end}}
+      </div>
+      <div class="help">
+        Grants the key access to admin-gated write endpoints without making it a full admin key.
+        <code>skills:write</code> covers <code>arc-sync skill push</code> + setting / clearing skill upstream tracking;
+        <code>recipes:write</code> covers <code>arc-sync recipe push</code> + recipe metadata edits.
+        Omit for a regular key — admin users always pass these gates anyway.
+      </div>
+    </div>
+    {{end}}
     <button type="submit" class="btn btn-primary">Generate Key</button>
   </form>
 </div>
