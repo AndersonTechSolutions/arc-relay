@@ -174,6 +174,129 @@ func TestCheckDrift_UpstreamFetchFailed(t *testing.T) {
 	}
 }
 
+// TestSetUpstream_RoundTrip verifies the PUT shape: the client serialises
+// SetUpstreamInput as expected by the relay handler, sets the right Content-
+// Type, and parses the body back into a map.
+func TestSetUpstream_RoundTrip(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotCT     string
+		gotBody   map[string]any
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotCT = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"skill_id":      "id-123",
+			"upstream_type": "git",
+			"git_url":       "https://github.com/example/repo",
+			"git_subpath":   "skills/foo",
+			"git_ref":       "main",
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	resp, err := c.SetUpstream("foo", &SetUpstreamInput{
+		GitURL:  "https://github.com/example/repo",
+		Subpath: "skills/foo",
+		Ref:     "main",
+	})
+	if err != nil {
+		t.Fatalf("SetUpstream: %v", err)
+	}
+	if gotMethod != "PUT" {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/api/skills/foo/upstream" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q", gotCT)
+	}
+	if gotBody["git_url"] != "https://github.com/example/repo" {
+		t.Errorf("body git_url = %v", gotBody["git_url"])
+	}
+	if gotBody["git_subpath"] != "skills/foo" {
+		t.Errorf("body git_subpath = %v", gotBody["git_subpath"])
+	}
+	if gotBody["git_ref"] != "main" {
+		t.Errorf("body git_ref = %v", gotBody["git_ref"])
+	}
+	if resp["git_url"] != "https://github.com/example/repo" {
+		t.Errorf("resp git_url = %v", resp["git_url"])
+	}
+}
+
+// TestSetUpstream_404 wraps the relay's 404 in a SkillHTTPError so the CLI
+// can pretty-print it.
+func TestSetUpstream_404(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "skill not found"})
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	_, err := c.SetUpstream("ghost", &SetUpstreamInput{GitURL: "https://github.com/example/repo"})
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	var httpErr *SkillHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *SkillHTTPError, got %T: %v", err, err)
+	}
+	if httpErr.Status != http.StatusNotFound {
+		t.Errorf("Status = %d", httpErr.Status)
+	}
+}
+
+// TestClearUpstream_RoundTrip verifies the DELETE call.
+func TestClearUpstream_RoundTrip(t *testing.T) {
+	var gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]bool{"cleared": true})
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	if err := c.ClearUpstream("foo"); err != nil {
+		t.Fatalf("ClearUpstream: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/api/skills/foo/upstream" {
+		t.Errorf("path = %q", gotPath)
+	}
+}
+
+// TestClearUpstream_404 surfaces a SkillHTTPError on a missing slug.
+func TestClearUpstream_404(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	c := NewClient(ts.URL, "key")
+	err := c.ClearUpstream("ghost")
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	var httpErr *SkillHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *SkillHTTPError, got %T: %v", err, err)
+	}
+	if httpErr.Status != http.StatusNotFound {
+		t.Errorf("Status = %d", httpErr.Status)
+	}
+}
+
 // TestSkill_OutdatedJSON verifies the JSON shape: when the relay sends
 // `outdated:1` + `drift:{...}` on a list/detail row, our Skill struct picks
 // both up. This guards against silent wire-shape regressions.

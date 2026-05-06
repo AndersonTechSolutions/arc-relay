@@ -346,6 +346,78 @@ func (c *Client) YankSkill(slug string, hard bool) error {
 	return nil
 }
 
+// SetUpstreamInput is the body posted to PUT /api/skills/{slug}/upstream by
+// the `arc-sync skill set-upstream` subcommand. Field names mirror the JSON
+// the relay accepts (see internal/web/skills_handlers.go's upstreamPUTBody).
+// Type defaults to "git" server-side when empty.
+type SetUpstreamInput struct {
+	Type    string `json:"type,omitempty"`
+	GitURL  string `json:"git_url"`
+	Subpath string `json:"git_subpath,omitempty"`
+	Ref     string `json:"git_ref,omitempty"`
+}
+
+// SetUpstream calls PUT /api/skills/{slug}/upstream. Used by `arc-sync skill
+// set-upstream` to add or replace the upstream-tracking row on an existing
+// skill without re-uploading the archive. Returns the relay's response body
+// as a parsed map so the caller can echo whatever the server settled on
+// (defaulted type, defaulted ref) back to the user.
+func (c *Client) SetUpstream(slug string, in *SetUpstreamInput) (map[string]any, error) {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	endpoint := "/api/skills/" + url.PathEscape(slug) + "/upstream"
+	req, err := http.NewRequest(http.MethodPut, c.BaseURL+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &SkillHTTPError{
+			Status: resp.StatusCode,
+			err:    handleErrorResponse(resp, respBody, fmt.Sprintf("skill %q set-upstream", slug)),
+		}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return nil, fmt.Errorf("parse set-upstream response: %w", err)
+	}
+	return out, nil
+}
+
+// ClearUpstream calls DELETE /api/skills/{slug}/upstream. Used by `arc-sync
+// skill clear-upstream` to disable update tracking for a skill. The relay
+// also clears any stale `outdated` flag in the same operation.
+func (c *Client) ClearUpstream(slug string) error {
+	endpoint := "/api/skills/" + url.PathEscape(slug) + "/upstream"
+	req, err := http.NewRequest(http.MethodDelete, c.BaseURL+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return &SkillHTTPError{
+			Status: resp.StatusCode,
+			err:    handleErrorResponse(resp, body, fmt.Sprintf("skill %q clear-upstream", slug)),
+		}
+	}
+	return nil
+}
+
 // SkillHTTPError lets ListSkills/GetSkill/etc. distinguish 404-not-found from
 // network/auth errors at the call site. handleErrorResponse already returns
 // useful errors for non-404s; we surface 404 specifically so GetSkill can

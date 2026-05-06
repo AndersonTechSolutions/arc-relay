@@ -152,6 +152,149 @@ func TestCheckUpdates_AllSkills(t *testing.T) {
 	}
 }
 
+// fakeUpstreamClient stubs upstreamClient so the set/clear tests don't have
+// to spin a real httptest server. Each method records its arguments so we
+// can assert the CLI passed the right values.
+type fakeUpstreamClient struct {
+	setSlug  string
+	setIn    *relay.SetUpstreamInput
+	setResp  map[string]any
+	setErr   error
+	clearArg string
+	clearErr error
+}
+
+func (f *fakeUpstreamClient) SetUpstream(slug string, in *relay.SetUpstreamInput) (map[string]any, error) {
+	f.setSlug = slug
+	f.setIn = in
+	return f.setResp, f.setErr
+}
+
+func (f *fakeUpstreamClient) ClearUpstream(slug string) error {
+	f.clearArg = slug
+	return f.clearErr
+}
+
+func TestSetUpstream_HappyPath(t *testing.T) {
+	c := &fakeUpstreamClient{
+		setResp: map[string]any{
+			"git_url":     "https://github.com/example/repo",
+			"git_subpath": "skills/foo",
+			"git_ref":     "main",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	if err := setUpstream(c, "foo", "https://github.com/example/repo", "skills/foo", "main", &stdout, &stderr); err != nil {
+		t.Fatalf("setUpstream: %v", err)
+	}
+	if c.setSlug != "foo" {
+		t.Errorf("slug arg = %q", c.setSlug)
+	}
+	if c.setIn == nil || c.setIn.GitURL != "https://github.com/example/repo" {
+		t.Errorf("SetUpstreamInput = %+v", c.setIn)
+	}
+	if c.setIn.Subpath != "skills/foo" || c.setIn.Ref != "main" {
+		t.Errorf("SetUpstreamInput subpath/ref = %+v", c.setIn)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Set upstream for foo") {
+		t.Errorf("stdout missing summary line: %q", out)
+	}
+	if !strings.Contains(out, "https://github.com/example/repo @ main") {
+		t.Errorf("stdout missing url+ref: %q", out)
+	}
+	if !strings.Contains(out, "path=skills/foo") {
+		t.Errorf("stdout missing path: %q", out)
+	}
+}
+
+func TestSetUpstream_DefaultsRepoRoot(t *testing.T) {
+	c := &fakeUpstreamClient{
+		setResp: map[string]any{
+			"git_url":     "https://github.com/example/repo",
+			"git_subpath": "",
+			"git_ref":     "HEAD",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	if err := setUpstream(c, "foo", "https://github.com/example/repo", "", "", &stdout, &stderr); err != nil {
+		t.Fatalf("setUpstream: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "path=(repo root)") {
+		t.Errorf("stdout should label empty subpath as (repo root): %q", stdout.String())
+	}
+}
+
+func TestSetUpstream_404(t *testing.T) {
+	c := &fakeUpstreamClient{
+		setErr: &relay.SkillHTTPError{Status: http.StatusNotFound},
+	}
+	var stdout, stderr bytes.Buffer
+	err := setUpstream(c, "ghost", "https://github.com/example/repo", "", "", &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	if !strings.Contains(stderr.String(), "ghost: not found on relay") {
+		t.Errorf("stderr missing 404 message: %q", stderr.String())
+	}
+}
+
+func TestSetUpstream_403(t *testing.T) {
+	c := &fakeUpstreamClient{
+		setErr: &relay.SkillHTTPError{Status: http.StatusForbidden},
+	}
+	var stdout, stderr bytes.Buffer
+	err := setUpstream(c, "guarded", "https://github.com/example/repo", "", "", &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 403")
+	}
+	if !strings.Contains(stderr.String(), "admin role or skills:write API key required") {
+		t.Errorf("stderr missing 403 hint: %q", stderr.String())
+	}
+}
+
+func TestSetUpstream_400(t *testing.T) {
+	c := &fakeUpstreamClient{
+		setErr: &relay.SkillHTTPError{Status: http.StatusBadRequest},
+	}
+	var stdout, stderr bytes.Buffer
+	err := setUpstream(c, "foo", "", "", "", &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 400")
+	}
+	if !strings.Contains(stderr.String(), "bad request") {
+		t.Errorf("stderr missing 400 message: %q", stderr.String())
+	}
+}
+
+func TestClearUpstream_HappyPath(t *testing.T) {
+	c := &fakeUpstreamClient{}
+	var stdout, stderr bytes.Buffer
+	if err := clearUpstream(c, "foo", &stdout, &stderr); err != nil {
+		t.Fatalf("clearUpstream: %v", err)
+	}
+	if c.clearArg != "foo" {
+		t.Errorf("slug arg = %q", c.clearArg)
+	}
+	if !strings.Contains(stdout.String(), "Cleared upstream tracking for foo") {
+		t.Errorf("stdout missing confirmation: %q", stdout.String())
+	}
+}
+
+func TestClearUpstream_404(t *testing.T) {
+	c := &fakeUpstreamClient{
+		clearErr: &relay.SkillHTTPError{Status: http.StatusNotFound},
+	}
+	var stdout, stderr bytes.Buffer
+	err := clearUpstream(c, "ghost", &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+	if !strings.Contains(stderr.String(), "ghost: not found on relay") {
+		t.Errorf("stderr missing 404 message: %q", stderr.String())
+	}
+}
+
 // TestPrintSkillUsage_MentionsCheckUpdates is a smoke test that the help
 // output advertises the new subcommand. It also indirectly verifies that
 // the dispatcher's `case "check-updates":` arm is discoverable to users.
@@ -174,5 +317,11 @@ func TestPrintSkillUsage_MentionsCheckUpdates(t *testing.T) {
 	}
 	if !strings.Contains(captured.String(), "check-updates") {
 		t.Errorf("printSkillUsage output missing check-updates: %q", captured.String())
+	}
+	if !strings.Contains(captured.String(), "set-upstream") {
+		t.Errorf("printSkillUsage output missing set-upstream: %q", captured.String())
+	}
+	if !strings.Contains(captured.String(), "clear-upstream") {
+		t.Errorf("printSkillUsage output missing clear-upstream: %q", captured.String())
 	}
 }

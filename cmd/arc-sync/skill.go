@@ -39,6 +39,10 @@ func runSkill() {
 		runSkillUnassign()
 	case "check-updates":
 		runSkillCheckUpdates()
+	case "set-upstream":
+		runSkillSetUpstream()
+	case "clear-upstream":
+		runSkillClearUpstream()
 	case "--help", "-h", "help":
 		printSkillUsage()
 	default:
@@ -81,6 +85,15 @@ Commands:
                         recommended action. Without args, iterates every skill
                         on the relay; skills without upstream tracking are
                         skipped silently.
+  set-upstream <slug> --git-url URL [--path SUBPATH] [--ref REF]
+                        Admin-only. Set or replace the upstream-tracking row
+                        for an existing skill without re-uploading. Use this
+                        to enable drift detection on a skill pushed with
+                        --no-upstream, or to fix a typo'd path/ref.
+  clear-upstream <slug>
+                        Admin-only. Remove upstream tracking for a skill.
+                        Future drift checker runs skip it silently and any
+                        stale "outdated" flag is cleared.
 
 Skills install to ~/.claude/skills/<slug>/. arc-sync only touches directories
 it created (those carrying a .arc-sync-version marker file); manually-installed
@@ -391,6 +404,108 @@ func runSkillUnassign() {
 		os.Exit(1)
 	}
 	fmt.Printf("Revoked %s access to skill %s\n", username, slug)
+}
+
+// upstreamClient narrows the relay.Client surface used by the set/clear-
+// upstream subcommands so the dispatcher tests can swap in a fake without
+// constructing an httptest server. The real *relay.Client satisfies it.
+type upstreamClient interface {
+	SetUpstream(slug string, in *relay.SetUpstreamInput) (map[string]any, error)
+	ClearUpstream(slug string) error
+}
+
+// runSkillSetUpstream implements `arc-sync skill set-upstream <slug>
+// --git-url URL [--path SUBPATH] [--ref REF]`.
+func runSkillSetUpstream() {
+	args := os.Args[3:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync skill set-upstream <slug> --git-url URL [--path SUBPATH] [--ref REF]")
+		os.Exit(1)
+	}
+	slug := args[0]
+	rest := args[1:]
+	gitURL := getFlagValue(rest, "--git-url")
+	subpath := getFlagValue(rest, "--path")
+	ref := getFlagValue(rest, "--ref")
+	if gitURL == "" {
+		fmt.Fprintln(os.Stderr, "skill set-upstream: --git-url is required")
+		os.Exit(1)
+	}
+	mgr := newSkillManager()
+	if err := setUpstream(mgr.Client, slug, gitURL, subpath, ref, os.Stdout, os.Stderr); err != nil {
+		os.Exit(1)
+	}
+}
+
+// setUpstream is the testable core of runSkillSetUpstream. It takes an
+// upstreamClient (interface so tests can inject a fake) plus explicit writers
+// for stdout/stderr.
+func setUpstream(c upstreamClient, slug, gitURL, subpath, ref string, stdout, stderr io.Writer) error {
+	resp, err := c.SetUpstream(slug, &relay.SetUpstreamInput{
+		GitURL:  gitURL,
+		Subpath: subpath,
+		Ref:     ref,
+	})
+	if err != nil {
+		printSetUpstreamError(stderr, slug, err)
+		return err
+	}
+	gotURL, _ := resp["git_url"].(string)
+	gotPath, _ := resp["git_subpath"].(string)
+	gotRef, _ := resp["git_ref"].(string)
+	if gotPath == "" {
+		gotPath = "(repo root)"
+	}
+	fmt.Fprintf(stdout, "Set upstream for %s: %s @ %s (path=%s)\n", slug, gotURL, gotRef, gotPath)
+	return nil
+}
+
+// runSkillClearUpstream implements `arc-sync skill clear-upstream <slug>`.
+func runSkillClearUpstream() {
+	args := os.Args[3:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync skill clear-upstream <slug>")
+		os.Exit(1)
+	}
+	slug := args[0]
+	mgr := newSkillManager()
+	if err := clearUpstream(mgr.Client, slug, os.Stdout, os.Stderr); err != nil {
+		os.Exit(1)
+	}
+}
+
+// clearUpstream is the testable core of runSkillClearUpstream.
+func clearUpstream(c upstreamClient, slug string, stdout, stderr io.Writer) error {
+	if err := c.ClearUpstream(slug); err != nil {
+		printSetUpstreamError(stderr, slug, err)
+		return err
+	}
+	fmt.Fprintf(stdout, "Cleared upstream tracking for %s\n", slug)
+	return nil
+}
+
+// printSetUpstreamError translates SkillHTTPError statuses into user-facing
+// messages. Mirrors printCheckDriftError; consolidating the two would couple
+// otherwise-independent commands so we keep them separate.
+func printSetUpstreamError(stderr io.Writer, slug string, err error) {
+	var httpErr *relay.SkillHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusBadRequest:
+			fmt.Fprintf(stderr, "skill %s: bad request (check --git-url and --ref values)\n", slug)
+			return
+		case http.StatusForbidden:
+			fmt.Fprintf(stderr, "skill %s: forbidden — admin role or skills:write API key required\n", slug)
+			return
+		case http.StatusNotFound:
+			fmt.Fprintf(stderr, "skill %s: not found on relay\n", slug)
+			return
+		case http.StatusUnsupportedMediaType:
+			fmt.Fprintf(stderr, "skill %s: relay rejected request body (likely a client/server mismatch)\n", slug)
+			return
+		}
+	}
+	fmt.Fprintf(stderr, "skill %s: %s\n", slug, err)
 }
 
 // driftClient narrows the relay.Client surface area used by the check-updates
