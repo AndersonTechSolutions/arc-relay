@@ -558,11 +558,26 @@ func (s *SkillStore) GetUpstream(skillID string) (*SkillUpstream, error) {
 	return u, nil
 }
 
-// ClearUpstream removes the upstream row for a skill (opt-out of update tracking).
+// ClearUpstream removes the upstream row for a skill (opt-out of update
+// tracking) and clears any stale `skills.outdated` flag in the same
+// transaction. The flag would otherwise be misleading: with no upstream to
+// compare against, "outdated" has no referent and the dashboard's drift card
+// would have nothing to render.
 func (s *SkillStore) ClearUpstream(skillID string) error {
-	_, err := s.db.Exec(`DELETE FROM skill_upstreams WHERE skill_id = ?`, skillID)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM skill_upstreams WHERE skill_id = ?`, skillID); err != nil {
 		return fmt.Errorf("clearing skill upstream: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE skills SET outdated = 0 WHERE id = ?`, skillID); err != nil {
+		return fmt.Errorf("clearing outdated flag: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit clear upstream: %w", err)
 	}
 	return nil
 }

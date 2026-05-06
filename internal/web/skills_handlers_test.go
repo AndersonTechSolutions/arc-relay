@@ -38,14 +38,15 @@ user-invocable: true
 // the user injected into context. Returns the mux and the underlying skill
 // store so tests can seed data without hitting the upload path.
 type skillsRig struct {
-	mux          *http.ServeMux
-	store        *store.SkillStore
-	svc          *skills.Service
-	users        *store.UserStore
-	admin        *store.User
-	userToInject *store.User
-	checker      *checker.Service
-	cacheDir     string
+	mux            *http.ServeMux
+	store          *store.SkillStore
+	svc            *skills.Service
+	users          *store.UserStore
+	admin          *store.User
+	userToInject   *store.User
+	apiKeyToInject *store.APIKey
+	checker        *checker.Service
+	cacheDir       string
 }
 
 func newSkillsRig(t *testing.T) *skillsRig {
@@ -99,6 +100,9 @@ func newSkillsRigWithCheckerEnabled(t *testing.T) *skillsRig {
 			if rig.userToInject != nil {
 				ctx = server.WithUser(ctx, rig.userToInject)
 			}
+			if rig.apiKeyToInject != nil {
+				ctx = server.WithAPIKey(ctx, rig.apiKeyToInject)
+			}
 			handler(w, r.WithContext(ctx))
 		})
 	}
@@ -136,6 +140,9 @@ func newSkillsRigWithChecker(t *testing.T, chk *checker.Service, cacheDir string
 			ctx := r.Context()
 			if rig.userToInject != nil {
 				ctx = server.WithUser(ctx, rig.userToInject)
+			}
+			if rig.apiKeyToInject != nil {
+				ctx = server.WithAPIKey(ctx, rig.apiKeyToInject)
 			}
 			handler(w, r.WithContext(ctx))
 		})
@@ -1308,6 +1315,316 @@ func TestSkillsHandlers_ListSkills_MixedDrift(t *testing.T) {
 	}
 	if !sawOutdated || !sawFresh {
 		t.Errorf("missing rows: outdated=%v fresh=%v", sawOutdated, sawFresh)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PUT/DELETE /api/skills/{slug}/upstream  (skill set-upstream design)
+// ---------------------------------------------------------------------------
+
+// seedSkillBySlug creates a bare skill row through the store so the upstream
+// tests don't need a real archive — the upstream handler operates on the
+// skill row directly, archives are irrelevant here.
+func seedSkillBySlug(t *testing.T, st *store.SkillStore, slug string) *store.Skill {
+	t.Helper()
+	sk := &store.Skill{
+		Slug:        slug,
+		DisplayName: slug,
+		Description: "fixture",
+		Visibility:  "public",
+	}
+	if err := st.CreateSkill(sk); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	got, err := st.GetSkillBySlug(slug)
+	if err != nil || got == nil {
+		t.Fatalf("GetSkillBySlug after create: sk=%v err=%v", got, err)
+	}
+	return got
+}
+
+// TestSkillsHandlers_SetUpstream_PUTHappyPath: PUT on a skill with no row
+// creates the row. Defaults type=git and ref=HEAD when caller omits them.
+func TestSkillsHandlers_SetUpstream_PUTHappyPath(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	sk := seedSkillBySlug(t, rig.store, "track-me")
+
+	body := `{"git_url":"https://github.com/example/repo","git_subpath":"skills/x"}`
+	req := httptest.NewRequest("PUT", "/api/skills/track-me/upstream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("PUT = %d body=%s", rw.Code, rw.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rw.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := resp["git_url"]; got != "https://github.com/example/repo" {
+		t.Errorf("git_url = %v", got)
+	}
+	if got := resp["git_subpath"]; got != "skills/x" {
+		t.Errorf("git_subpath = %v", got)
+	}
+	if got := resp["upstream_type"]; got != "git" {
+		t.Errorf("upstream_type = %v, want git (default)", got)
+	}
+	if got := resp["git_ref"]; got != "HEAD" {
+		t.Errorf("git_ref = %v, want HEAD (default)", got)
+	}
+	if resp["last_checked_at"] != nil {
+		t.Errorf("last_checked_at = %v, want nil on freshly-set row", resp["last_checked_at"])
+	}
+	if resp["drift"] != nil {
+		t.Errorf("drift = %v, want nil on freshly-set row", resp["drift"])
+	}
+
+	// Confirm the row landed in the store.
+	u, err := rig.store.GetUpstream(sk.ID)
+	if err != nil || u == nil {
+		t.Fatalf("GetUpstream: u=%v err=%v", u, err)
+	}
+	if u.GitURL != "https://github.com/example/repo" {
+		t.Errorf("stored GitURL = %q", u.GitURL)
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PUTReplacePreservesDrift: PUT on a skill that
+// already has an upstream row replaces the metadata fields (URL/path/ref) but
+// preserves last_seen_* and drift_* — that's the documented "fix a typo'd
+// pointer without losing prior check state" semantic.
+func TestSkillsHandlers_SetUpstream_PUTReplacePreservesDrift(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	sk := seedSkillBySlug(t, rig.store, "replace-me")
+
+	if err := rig.store.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://github.com/old/repo", GitRef: "main",
+	}); err != nil {
+		t.Fatalf("seed UpsertUpstream: %v", err)
+	}
+	if err := rig.store.WriteDriftReport(sk.ID, &store.DriftReport{
+		RelayVersion: "1.0.0", RelayHash: "rh", UpstreamSHA: "sha-deadbeef", UpstreamHash: "uh",
+		CommitsAhead: 4, Severity: "minor", Summary: "x", RecommendedAction: "y",
+		LLMModel: "test", DetectedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("seed WriteDriftReport: %v", err)
+	}
+
+	body := `{"git_url":"https://github.com/new/repo","git_ref":"feature-branch"}`
+	req := httptest.NewRequest("PUT", "/api/skills/replace-me/upstream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("PUT = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	post, err := rig.store.GetUpstream(sk.ID)
+	if err != nil || post == nil {
+		t.Fatalf("GetUpstream post: u=%v err=%v", post, err)
+	}
+	// Identity fields replaced.
+	if post.GitURL != "https://github.com/new/repo" {
+		t.Errorf("GitURL = %q, want https://github.com/new/repo", post.GitURL)
+	}
+	if post.GitRef != "feature-branch" {
+		t.Errorf("GitRef = %q, want feature-branch", post.GitRef)
+	}
+	// Drift state preserved across the upsert (replacing the pointer doesn't
+	// invalidate the prior check — the next checker run resolves it).
+	if post.DriftSeverity == nil || *post.DriftSeverity != "minor" {
+		t.Errorf("DriftSeverity = %v, want preserved 'minor'", post.DriftSeverity)
+	}
+	if post.DriftUpstreamSHA == nil || *post.DriftUpstreamSHA != "sha-deadbeef" {
+		t.Errorf("DriftUpstreamSHA = %v, want preserved", post.DriftUpstreamSHA)
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PUTMissingURL: empty git_url → 400.
+func TestSkillsHandlers_SetUpstream_PUTMissingURL(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	seedSkillBySlug(t, rig.store, "missing-url")
+
+	req := httptest.NewRequest("PUT", "/api/skills/missing-url/upstream",
+		strings.NewReader(`{"git_url":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusBadRequest {
+		t.Errorf("missing url = %d, want 400; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PUTUnsupportedType: non-git type pre-validated
+// to 400 (not 500 from the CHECK constraint).
+func TestSkillsHandlers_SetUpstream_PUTUnsupportedType(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	seedSkillBySlug(t, rig.store, "tarball-skill")
+
+	req := httptest.NewRequest("PUT", "/api/skills/tarball-skill/upstream",
+		strings.NewReader(`{"type":"tarball","git_url":"https://example.com/x.tar"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusBadRequest {
+		t.Errorf("type=tarball = %d, want 400; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PUTBadContentType: non-JSON content type → 415.
+func TestSkillsHandlers_SetUpstream_PUTBadContentType(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	seedSkillBySlug(t, rig.store, "form-encoded")
+
+	req := httptest.NewRequest("PUT", "/api/skills/form-encoded/upstream",
+		strings.NewReader(`git_url=https://github.com/example/repo`))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("form-encoded = %d, want 415; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PUTBadJSON: malformed JSON → 400.
+func TestSkillsHandlers_SetUpstream_PUTBadJSON(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	seedSkillBySlug(t, rig.store, "bad-json")
+
+	req := httptest.NewRequest("PUT", "/api/skills/bad-json/upstream",
+		strings.NewReader(`not-json`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusBadRequest {
+		t.Errorf("malformed JSON = %d, want 400; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_404Unknown: PUT/DELETE on a non-existent
+// slug → 404. Slug existence is enforced by HandleSkillByPath before the
+// upstream branch dispatches.
+func TestSkillsHandlers_SetUpstream_404Unknown(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	for _, method := range []string{"PUT", "DELETE"} {
+		req := httptest.NewRequest(method, "/api/skills/nope/upstream",
+			strings.NewReader(`{"git_url":"https://github.com/example/repo"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rw := httptest.NewRecorder()
+		rig.mux.ServeHTTP(rw, req)
+		if rw.Code != http.StatusNotFound {
+			t.Errorf("%s nope = %d, want 404; body=%s", method, rw.Code, rw.Body.String())
+		}
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_403NonAdminNoCap: non-admin user without the
+// skills:write capability key → 403.
+func TestSkillsHandlers_SetUpstream_403NonAdminNoCap(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.regularUser(t, "alice")
+	seedSkillBySlug(t, rig.store, "guarded-up")
+
+	req := httptest.NewRequest("PUT", "/api/skills/guarded-up/upstream",
+		strings.NewReader(`{"git_url":"https://github.com/example/repo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("non-admin no-cap = %d, want 403; body=%s", rw.Code, rw.Body.String())
+	}
+	if !strings.Contains(rw.Body.String(), "skills:write") {
+		t.Errorf("403 body should name the missing capability; got %s", rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PassWithCapKey: non-admin user paired with an
+// API key carrying skills:write succeeds. This is the CI-server path the
+// design specifically calls out.
+func TestSkillsHandlers_SetUpstream_PassWithCapKey(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.regularUser(t, "ci-user")
+	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:write"}}
+	seedSkillBySlug(t, rig.store, "ci-skill")
+
+	req := httptest.NewRequest("PUT", "/api/skills/ci-skill/upstream",
+		strings.NewReader(`{"git_url":"https://github.com/example/repo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Errorf("cap key = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_DELETE: DELETE removes the row and clears
+// skills.outdated atomically.
+func TestSkillsHandlers_SetUpstream_DELETE(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	sk := seedSkillBySlug(t, rig.store, "drop-me")
+
+	if err := rig.store.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://github.com/x/y", GitRef: "HEAD",
+	}); err != nil {
+		t.Fatalf("seed UpsertUpstream: %v", err)
+	}
+	if err := rig.store.WriteDriftReport(sk.ID, &store.DriftReport{
+		RelayVersion: "1.0.0", RelayHash: "rh", UpstreamSHA: "sha", UpstreamHash: "uh",
+		CommitsAhead: 1, Severity: "minor", Summary: "x", RecommendedAction: "y",
+		LLMModel: "test", DetectedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("seed WriteDriftReport: %v", err)
+	}
+
+	req := httptest.NewRequest("DELETE", "/api/skills/drop-me/upstream", nil)
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("DELETE = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	u, err := rig.store.GetUpstream(sk.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u != nil {
+		t.Errorf("upstream row should be deleted, got %+v", u)
+	}
+	post, err := rig.store.GetSkill(sk.ID)
+	if err != nil || post == nil {
+		t.Fatalf("GetSkill: sk=%v err=%v", post, err)
+	}
+	if post.Outdated != 0 {
+		t.Errorf("Outdated after DELETE = %d, want 0", post.Outdated)
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_405WrongMethod: GET/POST → 405.
+func TestSkillsHandlers_SetUpstream_405WrongMethod(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	seedSkillBySlug(t, rig.store, "method-up")
+
+	for _, method := range []string{"GET", "POST"} {
+		req := httptest.NewRequest(method, "/api/skills/method-up/upstream", nil)
+		rw := httptest.NewRecorder()
+		rig.mux.ServeHTTP(rw, req)
+		if rw.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s = %d, want 405; body=%s", method, rw.Code, rw.Body.String())
+		}
 	}
 }
 

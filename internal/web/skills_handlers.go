@@ -220,6 +220,13 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			h.handleCheckDrift(w, r, slug)
+		case "upstream":
+			// Admin OR API key with skills:write — same gate as version
+			// uploads, since this is the same kind of write to the same table.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:write") {
+				return
+			}
+			h.handleUpstream(w, r, skill)
 		default:
 			writeJSONError(w, http.StatusNotFound, "unknown subresource")
 		}
@@ -702,6 +709,127 @@ func (h *SkillsHandlers) handleCheckDrift(w http.ResponseWriter, r *http.Request
 		slog.Warn("skills check-drift: unknown outcome", "slug", slug, "outcome", outcome)
 		writeJSONError(w, http.StatusInternalServerError, "internal error")
 	}
+}
+
+// upstreamPUTBody is the JSON shape accepted by PUT /api/skills/{slug}/upstream.
+// Mirrors store.SkillUpstream's identity fields. Type defaults to "git" when
+// empty; Ref defaults to "HEAD" inside UpsertUpstream.
+type upstreamPUTBody struct {
+	Type    string `json:"type"`
+	GitURL  string `json:"git_url"`
+	Subpath string `json:"git_subpath"`
+	Ref     string `json:"git_ref"`
+}
+
+// handleUpstream implements PUT/DELETE /api/skills/{slug}/upstream.
+//
+// PUT replaces (or creates) the upstream-tracking row for an existing skill
+// without requiring a version bump or a re-uploaded archive. DELETE removes
+// the row and clears `skills.outdated` (atomic via SkillStore.ClearUpstream).
+//
+// Authorization is gated by the caller (admin OR API key with skills:write),
+// so this method only enforces method shape, content type, and body validity.
+//
+// Status codes:
+//
+//	200 — upstream set/replaced (PUT) or removed (DELETE)
+//	400 — body parse error, missing git_url, or unsupported type
+//	405 — method not PUT/DELETE
+//	415 — PUT without `Content-Type: application/json`
+func (h *SkillsHandlers) handleUpstream(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+	switch r.Method {
+	case http.MethodPut:
+		h.upsertUpstream(w, r, skill)
+	case http.MethodDelete:
+		if err := h.store.ClearUpstream(skill.ID); err != nil {
+			slog.Warn("skills clear upstream", "skill", skill.ID, "err", err)
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"cleared": true})
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// upsertUpstream is the PUT branch of handleUpstream.
+func (h *SkillsHandlers) upsertUpstream(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+	ct := r.Header.Get("Content-Type")
+	// Accept "application/json" exactly or with parameters (e.g. "; charset=utf-8").
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if !strings.EqualFold(ct, "application/json") {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "expected application/json")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "body unreadable")
+		return
+	}
+	var in upstreamPUTBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if in.Type != "" && in.Type != "git" {
+		// Pre-validate the CHECK constraint so the response is 400 not 500.
+		writeJSONError(w, http.StatusBadRequest, "unsupported upstream type (only \"git\" is supported)")
+		return
+	}
+	if strings.TrimSpace(in.GitURL) == "" {
+		writeJSONError(w, http.StatusBadRequest, "git_url is required")
+		return
+	}
+
+	if err := h.store.UpsertUpstream(&store.SkillUpstream{
+		SkillID:      skill.ID,
+		UpstreamType: in.Type,
+		GitURL:       in.GitURL,
+		GitSubpath:   in.Subpath,
+		GitRef:       in.Ref,
+	}); err != nil {
+		slog.Warn("skills upsert upstream", "skill", skill.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// Re-fetch so the response includes server-side defaults (type, ref) and
+	// any preserved last_seen_* / drift_* fields from a prior row.
+	u, err := h.store.GetUpstream(skill.ID)
+	if err != nil || u == nil {
+		slog.Warn("skills upsert upstream: re-read", "skill", skill.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, upstreamResponse(u))
+}
+
+// upstreamResponse renders a SkillUpstream as the JSON shape the API returns
+// from PUT /api/skills/{slug}/upstream and (in the future) a possible GET on
+// the same path. Reuses driftBlockFromUpstream for the drift sub-block — null
+// on a freshly-set row, populated once the next checker run records drift.
+func upstreamResponse(u *store.SkillUpstream) map[string]any {
+	out := map[string]any{
+		"skill_id":      u.SkillID,
+		"upstream_type": u.UpstreamType,
+		"git_url":       u.GitURL,
+		"git_subpath":   u.GitSubpath,
+		"git_ref":       u.GitRef,
+		"created_at":    u.CreatedAt.UTC().Format(time.RFC3339),
+		"updated_at":    u.UpdatedAt.UTC().Format(time.RFC3339),
+		"drift":         driftBlockFromUpstream(u),
+	}
+	if u.LastCheckedAt != nil {
+		out["last_checked_at"] = u.LastCheckedAt.UTC().Format(time.RFC3339)
+	} else {
+		out["last_checked_at"] = nil
+	}
+	return out
 }
 
 // driftBlockFromUpstream formats the drift_* fields of a SkillUpstream into a

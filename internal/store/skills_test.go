@@ -495,6 +495,49 @@ func TestSkillUpstream_ClearDeletesRow(t *testing.T) {
 	}
 }
 
+// TestSkillUpstream_ClearAlsoResetsOutdated locks in the contract that
+// removing a skill's upstream row also flips skills.outdated back to 0 — a
+// stale "outdated" flag with no upstream to point at would leave the dashboard
+// with no drift card to render.
+func TestSkillUpstream_ClearAlsoResetsOutdated(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	sk := seedSkill(t, skills, "up-outdated")
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://example.com/x", GitRef: "HEAD",
+	}); err != nil {
+		t.Fatalf("UpsertUpstream: %v", err)
+	}
+	// Drive outdated=1 by writing a drift report (the production path that
+	// flips the flag).
+	if err := skills.WriteDriftReport(sk.ID, &store.DriftReport{
+		RelayVersion: "1.0.0", RelayHash: "rh", UpstreamSHA: "sha", UpstreamHash: "uh",
+		CommitsAhead: 1, Severity: "minor", Summary: "x", RecommendedAction: "y",
+		LLMModel: "test", DetectedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteDriftReport: %v", err)
+	}
+	pre, err := skills.GetSkill(sk.ID)
+	if err != nil || pre == nil {
+		t.Fatalf("GetSkill pre: sk=%v err=%v", pre, err)
+	}
+	if pre.Outdated != 1 {
+		t.Fatalf("precondition: expected Outdated=1 after WriteDriftReport, got %d", pre.Outdated)
+	}
+
+	if err := skills.ClearUpstream(sk.ID); err != nil {
+		t.Fatalf("ClearUpstream: %v", err)
+	}
+	post, err := skills.GetSkill(sk.ID)
+	if err != nil || post == nil {
+		t.Fatalf("GetSkill post: sk=%v err=%v", post, err)
+	}
+	if post.Outdated != 0 {
+		t.Errorf("Outdated after ClearUpstream = %d, want 0", post.Outdated)
+	}
+}
+
 func TestSkillUpstream_ListOrder(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	skills := store.NewSkillStore(db)
