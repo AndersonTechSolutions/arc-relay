@@ -260,6 +260,23 @@ func (h *Handlers) HandleSkillRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Redirect(w, r, "/skills", http.StatusFound)
+	case "upstream":
+		// /skills/{slug}/upstream        — POST sets/replaces the upstream row
+		// /skills/{slug}/upstream/clear  — POST removes it
+		if len(parts) == 2 {
+			h.handleUpstreamForm(w, r, skill)
+			return
+		}
+		if len(parts) == 3 && parts[2] == "clear" {
+			if err := h.skillStore.ClearUpstream(skill.ID); err != nil {
+				slog.Warn("clear upstream", "slug", slug, "err", err)
+				http.Error(w, "clear upstream failed", http.StatusInternalServerError)
+				return
+			}
+			http.Redirect(w, r, "/skills/"+slug, http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
 	case "versions":
 		if len(parts) < 4 {
 			http.NotFound(w, r)
@@ -322,14 +339,95 @@ func (h *Handlers) renderSkillDetail(w http.ResponseWriter, r *http.Request, use
 	}
 
 	h.render(w, r, "skill_detail.html", map[string]any{
-		"Nav":         "skills",
-		"User":        user,
-		"Skill":       skill,
-		"Versions":    versions,
-		"Assignments": assignments,
+		"Nav":          "skills",
+		"User":         user,
+		"Skill":        skill,
+		"Versions":     versions,
+		"Assignments":  assignments,
 		"DownloadBase": "/api/skills/" + skill.Slug + "/versions",
-		"Upstream":    upstream,
-		"Drift":       drift,
+		"Upstream":     upstream,
+		"Drift":        drift,
+		"UpstreamForm": map[string]string{},
+	})
+}
+
+// handleUpstreamForm processes the /skills/{slug}/upstream POST that the
+// admin "Update tracking" card emits. The form's hidden CSRF token has
+// already been validated and admin role enforced by HandleSkillRoutes
+// before this is called.
+//
+// Validation is deliberately tight — git_url is required and non-empty, and
+// the type is hardcoded to "git" (the only value the schema accepts). On
+// validation failure we re-render the detail page with an inline error so
+// the admin doesn't lose their typed values to a redirect.
+func (h *Handlers) handleUpstreamForm(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+	user := getUser(r)
+	gitURL := strings.TrimSpace(r.FormValue("git_url"))
+	subpath := strings.TrimSpace(r.FormValue("git_subpath"))
+	ref := strings.TrimSpace(r.FormValue("git_ref"))
+
+	if gitURL == "" {
+		h.renderSkillDetailWithUpstreamError(w, r, user, skill, "Upstream git URL is required.", gitURL, subpath, ref)
+		return
+	}
+
+	if err := h.skillStore.UpsertUpstream(&store.SkillUpstream{
+		SkillID:    skill.ID,
+		GitURL:     gitURL,
+		GitSubpath: subpath,
+		GitRef:     ref,
+	}); err != nil {
+		slog.Warn("upsert upstream", "slug", skill.Slug, "err", err)
+		h.renderSkillDetailWithUpstreamError(w, r, user, skill, "Saving upstream tracking failed: "+err.Error(), gitURL, subpath, ref)
+		return
+	}
+	http.Redirect(w, r, "/skills/"+skill.Slug, http.StatusFound)
+}
+
+// renderSkillDetailWithUpstreamError re-renders /skills/{slug} with an
+// upstream-specific error and the user's last form values so they can fix
+// the input without retyping.
+func (h *Handlers) renderSkillDetailWithUpstreamError(w http.ResponseWriter, r *http.Request, user *store.User, skill *store.Skill, msg, gitURL, subpath, ref string) {
+	versions, err := h.skillStore.ListVersions(skill.ID)
+	if err != nil {
+		slog.Warn("skill detail versions", "slug", skill.Slug, "err", err)
+		http.Error(w, "failed to load versions", http.StatusInternalServerError)
+		return
+	}
+	var assignments []*store.SkillAssignment
+	if user.Role == "admin" {
+		assignments, err = h.skillStore.ListAssignmentsForSkill(skill.ID)
+		if err != nil {
+			slog.Warn("skill detail assignments", "slug", skill.Slug, "err", err)
+			http.Error(w, "failed to load assignments", http.StatusInternalServerError)
+			return
+		}
+	}
+	var (
+		upstream *store.SkillUpstream
+		drift    map[string]any
+	)
+	if u, err := h.skillStore.GetUpstream(skill.ID); err == nil && u != nil {
+		upstream = u
+		if skill.Outdated == 1 {
+			drift = driftBlockFromUpstream(u)
+		}
+	}
+	h.render(w, r, "skill_detail.html", map[string]any{
+		"Nav":          "skills",
+		"User":         user,
+		"Skill":        skill,
+		"Versions":     versions,
+		"Assignments":  assignments,
+		"DownloadBase": "/api/skills/" + skill.Slug + "/versions",
+		"Upstream":     upstream,
+		"Drift":        drift,
+		"UpstreamErr":  msg,
+		"UpstreamForm": map[string]string{
+			"GitURL":  gitURL,
+			"Subpath": subpath,
+			"Ref":     ref,
+		},
 	})
 }
 

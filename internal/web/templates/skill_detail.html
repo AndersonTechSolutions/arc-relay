@@ -70,6 +70,9 @@
 
 <div class="card">
   <h3 style="margin-top:0;">Update tracking</h3>
+  {{if .UpstreamErr}}
+  <div class="alert alert-danger" style="margin-bottom:0.75rem;">{{.UpstreamErr}}</div>
+  {{end}}
   {{if .Upstream}}
   <table>
     <tbody>
@@ -88,6 +91,38 @@
       <tr><th>Last seen SHA</th><td>{{if .Upstream.LastSeenSHA}}<code style="font-size:0.85em;">{{deref .Upstream.LastSeenSHA}}</code>{{else}}<span style="color:#999;">—</span>{{end}}</td></tr>
     </tbody>
   </table>
+
+  {{if and .User (eq .User.Role "admin")}}
+  <details style="margin-top:0.75rem;">
+    <summary style="cursor:pointer; color:#0d6efd;">Edit upstream tracking</summary>
+    <form method="POST" action="/skills/{{.Skill.Slug}}/upstream" style="margin-top:0.5rem;">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <div class="form-group" style="margin-bottom:0.5rem;">
+        <label style="display:block; font-size:0.9em; font-weight:500;">Git URL</label>
+        <input type="text" name="git_url" required value="{{.Upstream.GitURL}}"
+               style="width:100%; padding:0.4rem; box-sizing:border-box;">
+      </div>
+      <div class="form-group" style="margin-bottom:0.5rem;">
+        <label style="display:block; font-size:0.9em; font-weight:500;">Subpath <small style="font-weight:normal; color:#666;">(blank for repo root)</small></label>
+        <input type="text" name="git_subpath" value="{{.Upstream.GitSubpath}}"
+               style="width:100%; padding:0.4rem; box-sizing:border-box;">
+      </div>
+      <div class="form-group" style="margin-bottom:0.5rem;">
+        <label style="display:block; font-size:0.9em; font-weight:500;">Ref <small style="font-weight:normal; color:#666;">(branch or tag; default HEAD)</small></label>
+        <input type="text" name="git_ref" value="{{.Upstream.GitRef}}"
+               style="width:100%; padding:0.4rem; box-sizing:border-box;">
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
+        <button class="btn" type="submit">Save changes</button>
+        <button class="btn" type="submit" formaction="/skills/{{.Skill.Slug}}/upstream/clear"
+                style="background:#dc3545; color:#fff;"
+                onclick="return confirm('Stop tracking upstream for this skill? Future drift checker runs will skip it silently and any stale outdated flag clears.');">
+          Clear tracking
+        </button>
+      </div>
+    </form>
+  </details>
+  {{end}}
 
   {{if .Drift}}
   <div style="margin-top:1rem; padding:0.75rem 1rem; background:#fff3cd; border:1px solid #f0d27a; border-radius:4px;">
@@ -140,6 +175,36 @@
     so the relay has no source repo to compare against.
     Drift detection is silently skipped.
   </p>
+  {{if and .User (eq .User.Role "admin")}}
+  <form method="POST" action="/skills/{{.Skill.Slug}}/upstream" style="margin-top:0.75rem;">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <p style="margin:0 0 0.5rem 0; font-size:0.9em;">
+      To enable drift detection, point this skill at its upstream repo:
+    </p>
+    <div class="form-group" style="margin-bottom:0.5rem;">
+      <label style="display:block; font-size:0.9em; font-weight:500;">Git URL</label>
+      <input type="text" name="git_url" required
+             value="{{with .UpstreamForm}}{{index . "GitURL"}}{{end}}"
+             placeholder="https://github.com/owner/repo"
+             style="width:100%; padding:0.4rem; box-sizing:border-box;">
+    </div>
+    <div class="form-group" style="margin-bottom:0.5rem;">
+      <label style="display:block; font-size:0.9em; font-weight:500;">Subpath <small style="font-weight:normal; color:#666;">(blank for repo root)</small></label>
+      <input type="text" name="git_subpath"
+             value="{{with .UpstreamForm}}{{index . "Subpath"}}{{end}}"
+             placeholder="skills/foo"
+             style="width:100%; padding:0.4rem; box-sizing:border-box;">
+    </div>
+    <div class="form-group" style="margin-bottom:0.5rem;">
+      <label style="display:block; font-size:0.9em; font-weight:500;">Ref <small style="font-weight:normal; color:#666;">(branch or tag; default HEAD)</small></label>
+      <input type="text" name="git_ref"
+             value="{{with .UpstreamForm}}{{index . "Ref"}}{{end}}"
+             placeholder="main"
+             style="width:100%; padding:0.4rem; box-sizing:border-box;">
+    </div>
+    <button class="btn" type="submit" style="margin-top:0.25rem;">Enable upstream tracking</button>
+  </form>
+  {{end}}
   {{end}}
 </div>
 
