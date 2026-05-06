@@ -153,6 +153,9 @@ arc-sync skill install <slug> [--version V]   # Pull a skill into ~/.claude/skil
 arc-sync skill remove <slug> # Remove an arc-sync-managed skill (refuses hand-installed dirs)
 arc-sync skill sync          # Reconcile ~/.claude/skills/ against the relay's assigned set
 arc-sync skill push <dir> --version V [--visibility public|restricted]   # Admin upload
+arc-sync skill check-updates [<slug>]                # Compare a skill (or all) against its declared upstream
+arc-sync skill set-upstream <slug> --git-url URL [--path PATH] [--ref REF]  # Add/replace upstream tracking
+arc-sync skill clear-upstream <slug>                 # Stop tracking a skill
 ```
 
 **Authentication:** `arc-sync init` uses the device code flow by default. It opens a browser where you log in and approve the CLI. For CI environments, set `ARC_SYNC_URL` and `ARC_SYNC_API_KEY` environment variables.
@@ -569,11 +572,15 @@ Arc Relay can act as the source of truth for Claude Code skills. Admins publish 
 | GET | `/api/skills/assigned` | Caller's effective set + pinned versions | API key |
 | GET | `/api/skills/{slug}` | Metadata + version list | API key |
 | GET | `/api/skills/{slug}/versions/{version}` | Version metadata | API key |
-| POST | `/api/skills/{slug}/versions/{version}` | Upload archive | API key (admin) |
+| POST | `/api/skills/{slug}/versions/{version}` | Upload archive | API key (admin or `skills:write`) |
 | GET | `/api/skills/{slug}/versions/{version}/archive` | Download tar.gz (X-Skill-SHA256 header) | API key |
 | DELETE | `/api/skills/{slug}[?hard=true]` | Yank or hard-delete skill | API key (admin) |
 | DELETE | `/api/skills/{slug}/versions/{version}` | Yank version | API key (admin) |
+| PUT | `/api/skills/{slug}/upstream` | Add/replace upstream tracking on an existing skill (no version bump) | API key (admin or `skills:write`) |
+| DELETE | `/api/skills/{slug}/upstream` | Remove upstream tracking; clears `outdated` flag | API key (admin or `skills:write`) |
+| POST | `/api/skills/{slug}/check-drift` | On-demand drift check; runs the same flow as the daily cron | API key (admin) |
 | Web | `/skills`, `/skills/{slug}`, `/skills/new` | Browse + upload (CSRF-checked) | session cookie |
+| Web | `POST /skills/{slug}/upstream` + `/upstream/clear` | Inline form on the skill detail page to enable, edit, or remove upstream tracking | session cookie (admin) |
 
 ### Client workflow
 
@@ -598,7 +605,32 @@ The `.arc-sync-version` JSON marker (slug + version + SHA-256 + relay URL) is wh
 
 ### Skill update tracking (optional)
 
-Arc Relay can monitor opt-in skills for upstream drift. When you publish a skill that mirrors a community repository, declare the upstream in `.arc-sync/upstream.toml` (or via `--upstream-git` flags on `arc-sync skill push`). The relay then runs a daily cron that checks the upstream for changes, classifies their severity via an LLM, and surfaces outdated status in `arc-sync skill list --remote`. Disabled by default; enable via `[skills.checker] enabled = true` or `ARC_RELAY_SKILLS_CHECKER_ENABLED=true`. See [docs/skills.md](docs/skills.md) for the full feature documentation.
+Arc Relay can monitor opt-in skills for upstream drift. When you publish a skill that mirrors a community repository, declare the upstream in `.arc-sync/upstream.toml` (or via `--upstream-git` flags on `arc-sync skill push`). The relay then runs a daily cron that checks the upstream for changes, classifies their severity via an LLM, and surfaces outdated status in `arc-sync skill list --remote`. Disabled by default; enable via `[skills.checker] enabled = true` or `ARC_RELAY_SKILLS_CHECKER_ENABLED=true`.
+
+Tracking can also be enabled, edited, or removed **after** a skill is already published — without bumping its version or re-uploading the archive — through any of three interchangeable surfaces:
+
+```bash
+# CLI (admin or any API key with skills:write)
+arc-sync skill set-upstream my-skill \
+    --git-url https://github.com/example/repo \
+    --path skills/my-skill \
+    --ref main
+arc-sync skill clear-upstream my-skill
+```
+
+```bash
+# HTTP API
+curl -X PUT https://your-relay/api/skills/my-skill/upstream \
+    -H 'Authorization: Bearer YOUR_KEY' \
+    -H 'Content-Type: application/json' \
+    -d '{"git_url":"https://github.com/example/repo","git_subpath":"skills/my-skill","git_ref":"main"}'
+curl -X DELETE https://your-relay/api/skills/my-skill/upstream \
+    -H 'Authorization: Bearer YOUR_KEY'
+```
+
+Or use the inline form on `/skills/{slug}` (admin web UI) — there's an "Update tracking" card with an **Enable upstream tracking** button when no upstream is configured, and an **Edit upstream tracking** + **Clear tracking** pair when one already exists.
+
+See [docs/skills.md](docs/skills.md) for the full feature documentation, including the severity rubric, drift-clear semantics, operator config, and metrics.
 
 ## Connect to Comma Compliance Arc
 

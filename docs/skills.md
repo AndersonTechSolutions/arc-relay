@@ -62,6 +62,68 @@ Each successful push clears any open drift state for the skill — the relay
 re-records the published archive's `last_seen_hash` so the next cron cycle
 compares against the new baseline.
 
+## Changing upstream tracking after the fact
+
+You don't need to bump a skill's version (or re-upload the archive) to fix
+a typo'd ref, retarget a moved repo, enable tracking on a skill that was
+pushed `--no-upstream`, or stop tracking entirely. Three interchangeable
+surfaces all hit the same `skill_upstreams` row:
+
+### CLI
+
+```bash
+# Add or replace the row in place (any combination of flags can change)
+arc-sync skill set-upstream my-skill \
+    --git-url https://github.com/example/repo \
+    --path skills/my-skill \
+    --ref main
+
+# Stop tracking (also clears the stale `outdated` flag)
+arc-sync skill clear-upstream my-skill
+```
+
+### HTTP API
+
+```bash
+PUT /api/skills/{slug}/upstream
+{
+  "type": "git",                         # optional, defaults to "git"
+  "git_url": "https://github.com/...",   # required, non-empty
+  "git_subpath": "skills/my-skill",      # optional, "" = repo root
+  "git_ref": "main"                      # optional, defaults to "HEAD"
+}
+
+DELETE /api/skills/{slug}/upstream       # no body
+```
+
+Both verbs require admin role **or** an API key with the `skills:write`
+capability — same gate as `POST /api/skills/{slug}/versions/{version}`.
+Validation errors return `400`, missing slug `404`, wrong content type
+`415`, missing/invalid auth `401/403`.
+
+### Dashboard
+
+On `/skills/{slug}`, the **Update tracking** card has:
+
+- **No upstream configured** → an inline form to set git URL, subpath, and ref
+- **Upstream configured** → a collapsed `Edit upstream tracking` form prefilled
+  with the current values, plus a **Clear tracking** button (confirm-gated)
+
+Form posts go to `POST /skills/{slug}/upstream` (CSRF-checked, admin-only).
+
+### Semantics
+
+PUT preserves `last_seen_*` and `drift_*` from any prior row — replacing
+the pointer doesn't invalidate the prior check. The next cron run resolves
+whether the new ref/path is in sync. Setting upstream on a brand-new row
+leaves those columns NULL until the first cron tick.
+
+DELETE is atomic: the `skill_upstreams` row is removed and `skills.outdated`
+is cleared in the same transaction. With no upstream to compare against,
+the "outdated" flag has no referent — leaving it set would be misleading.
+
+DELETE does **not** delete the skill itself or any of its versions.
+
 ## How drift detection works
 
 Two paths trigger a check:
