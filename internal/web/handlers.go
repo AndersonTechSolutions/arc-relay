@@ -2388,7 +2388,12 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ownKeys, _ := h.users.ListAPIKeys(user.ID)
+	ownKeys, err := h.users.ListAPIKeys(user.ID)
+	if err != nil {
+		slog.Error("listing api keys", "err", err, "user", user.ID)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
 	var profiles []*store.AgentProfile
 	if isAdmin {
@@ -2493,8 +2498,12 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "You can only revoke your own API keys", http.StatusForbidden)
 			return
 		}
+		returnTo := "/api-keys"
+		if r.FormValue("return_to") == "/api-keys?all=1" {
+			returnTo = "/api-keys?all=1"
+		}
 		_ = h.users.RevokeAPIKey(keyID)
-		http.Redirect(w, r, "/api-keys", http.StatusFound)
+		http.Redirect(w, r, returnTo, http.StatusFound)
 		return
 	}
 	http.NotFound(w, r)
