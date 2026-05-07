@@ -17,6 +17,64 @@
 </div>
 {{end}}
 
+{{if $.IsAdmin}}
+<div style="text-align:right;margin-bottom:0.75rem;">
+  {{if .FleetView}}
+  <a href="/api-keys" class="btn btn-outline btn-sm">View only my keys</a>
+  {{else}}
+  <a href="/api-keys?all=1" class="btn btn-outline btn-sm">View all keys (admin)</a>
+  {{end}}
+</div>
+{{end}}
+
+{{if .FleetView}}
+<div class="card">
+  <h2>API Keys (all users)</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Owner</th>
+        <th>Name</th>
+        <th>Profile</th>
+        <th>Capabilities</th>
+        <th>Created</th>
+        <th>Last Used</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .FleetKeys}}
+      <tr>
+        <td>{{.OwnerUsername}}</td>
+        <td>{{.Name}}</td>
+        <td>{{if .ProfileName}}{{.ProfileName}}{{else}}<span style="color:var(--text-muted)">—</span>{{end}}</td>
+        <td>
+          {{if .Capabilities}}
+            {{range .Capabilities}}<span class="badge badge-http">{{.}}</span> {{end}}
+          {{else}}<span style="color:var(--text-muted)">—</span>{{end}}
+        </td>
+        <td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02"}}</td>
+        <td style="white-space:nowrap">{{if .LastUsed}}{{.LastUsed.Format "2006-01-02"}}{{else}}<span style="color:var(--text-muted)">Never</span>{{end}}</td>
+        <td>{{if .Revoked}}<span class="badge badge-stopped">Revoked</span>{{else}}<span class="badge badge-running">Active</span>{{end}}</td>
+        <td>
+          {{if not .Revoked}}
+          <form method="POST" action="/api-keys/{{.ID}}/revoke" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+            <button class="btn btn-danger btn-sm" type="submit">Revoke</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+</div>
+{{end}}
+
+{{if not .FleetView}}
 <div class="card">
   {{if .Keys}}
   <div class="table-wrap">
@@ -106,4 +164,5 @@
     <button type="submit" class="btn btn-primary">Generate Key</button>
   </form>
 </div>
+{{end}}
 {{end}}

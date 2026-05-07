@@ -2369,11 +2369,29 @@ func sanitizeCapabilities(values []string) []string {
 
 func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
-	keys, _ := h.users.ListAPIKeys(user.ID)
+	isAdmin := user.Role == "admin"
+	fleetMode := r.URL.Query().Get("all") == "1"
 
-	// Admins can see all profiles; non-admins see only their own (if assigned)
+	if fleetMode && !isAdmin {
+		http.Error(w, "Admin access required to view all API keys", http.StatusForbidden)
+		return
+	}
+
+	var fleetKeys []*store.APIKeyWithOwner
+	if fleetMode {
+		var err error
+		fleetKeys, err = h.users.ListAllAPIKeys()
+		if err != nil {
+			slog.Error("listing all api keys", "err", err)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	ownKeys, _ := h.users.ListAPIKeys(user.ID)
+
 	var profiles []*store.AgentProfile
-	if user.Role == "admin" {
+	if isAdmin {
 		profiles, _ = h.profileStore.List()
 	} else if user.DefaultProfileID != nil {
 		if p, err := h.profileStore.Get(*user.DefaultProfileID); err == nil {
@@ -2382,15 +2400,15 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]any{
-		"Nav": "apikeys", "User": user, "Keys": keys, "Profiles": profiles,
-		// SupportedCapabilities drives the admin-only checkbox group on the
-		// create form. Non-admins see no capability picker; the handler also
-		// gates server-side so a hand-crafted POST can't grant capabilities.
+		"Nav":                   "apikeys",
+		"User":                  user,
+		"IsAdmin":               isAdmin,
+		"Keys":                  ownKeys,
+		"FleetKeys":             fleetKeys,
+		"FleetView":             fleetMode,
+		"Profiles":              profiles,
 		"SupportedCapabilities": store.SupportedCapabilities,
 	}
-	// Consume one-time flash nonce to display newly created key.
-	// LoadAndDelete ensures the key is shown only once; refreshing
-	// the redirected URL won't re-display it.
 	if nonce := r.URL.Query().Get("new"); nonce != "" {
 		if rawKey, ok := h.flashKeys.LoadAndDelete(nonce); ok {
 			data["NewKey"] = rawKey
