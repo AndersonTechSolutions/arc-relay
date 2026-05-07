@@ -3,12 +3,14 @@ package web
 import (
 	"bytes"
 	"crypto/rand"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -20,12 +22,15 @@ import (
 // It is package-local (web, not web_test) so the tests can use setUser /
 // setSessionID directly without spinning a session-cookie auth dance.
 type dashRig struct {
-	h        *Handlers
-	store    *store.SkillStore
-	users    *store.UserStore
-	admin    *store.User
-	sid      string
-	csrfTok  string
+	h           *Handlers
+	store       *store.SkillStore
+	users       *store.UserStore
+	admin       *store.User
+	sid         string
+	csrfTok     string
+	recipeStore *store.SetupRecipeStore
+	serverStore *store.ServerStore
+	testDB      *store.DB
 }
 
 func newDashRig(t *testing.T) *dashRig {
@@ -34,6 +39,8 @@ func newDashRig(t *testing.T) *dashRig {
 	st := store.NewSkillStore(db)
 	users := store.NewUserStore(db)
 	sessions := store.NewSessionStore(db)
+	recipeStore := store.NewSetupRecipeStore(db)
+	serverStore := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	admin, err := users.Create("dash-admin", "pw", "admin")
 	if err != nil {
@@ -55,6 +62,21 @@ func newDashRig(t *testing.T) *dashRig {
 			}
 			return *s
 		},
+		"timeAgo": func(t time.Time) string {
+			d := time.Since(t)
+			switch {
+			case d < time.Minute:
+				return "just now"
+			case d < time.Hour:
+				return fmt.Sprintf("%dm ago", int(d.Minutes()))
+			case d < 24*time.Hour:
+				return fmt.Sprintf("%dh ago", int(d.Hours()))
+			case d < 14*24*time.Hour:
+				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+			default:
+				return t.UTC().Format("2006-01-02")
+			}
+		},
 	}
 
 	h := &Handlers{
@@ -62,6 +84,8 @@ func newDashRig(t *testing.T) *dashRig {
 		users:        users,
 		sessionStore: sessions,
 		skillStore:   st,
+		recipeStore:  recipeStore,
+		servers:      serverStore,
 		csrfSecret:   csrfSecret,
 		tmpls:        make(map[string]*template.Template),
 	}
@@ -70,8 +94,25 @@ func newDashRig(t *testing.T) *dashRig {
 		template.New("").Funcs(funcMap).
 			ParseFS(templateFS, "templates/layout.html", "templates/skill_detail.html"),
 	)
+	// Load dashboard and servers templates for dashboard tests.
+	h.tmpls["dashboard.html"] = template.Must(
+		template.New("").Funcs(funcMap).
+			ParseFS(templateFS, "templates/layout.html", "templates/dashboard.html"),
+	)
+	h.tmpls["servers.html"] = template.Must(
+		template.New("").Funcs(funcMap).
+			ParseFS(templateFS, "templates/layout.html", "templates/servers.html"),
+	)
 
-	return &dashRig{h: h, store: st, users: users, admin: admin}
+	return &dashRig{
+		h:           h,
+		store:       st,
+		users:       users,
+		admin:       admin,
+		recipeStore: recipeStore,
+		serverStore: serverStore,
+		testDB:      db,
+	}
 }
 
 // adminReq builds a request with the admin session and a valid CSRF token
@@ -100,6 +141,26 @@ func (d *dashRig) adminReq(t *testing.T, method, path string, form url.Values) *
 	}
 	ctx := setUser(req.Context(), d.admin)
 	ctx = setSessionID(ctx, d.sid)
+	return req.WithContext(ctx)
+}
+
+// userReq builds a request with a specific user's session attached.
+func (d *dashRig) userReq(t *testing.T, user *store.User, method, path string, form url.Values) *http.Request {
+	t.Helper()
+	sid := "test-session-" + user.ID
+	var bodyReader *strings.Reader
+	if form != nil {
+		form.Set("csrf_token", d.h.csrfToken(sid))
+		bodyReader = strings.NewReader(form.Encode())
+	} else {
+		bodyReader = strings.NewReader("")
+	}
+	req := httptest.NewRequest(method, path, bodyReader)
+	if method == http.MethodPost && form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	ctx := setUser(req.Context(), user)
+	ctx = setSessionID(ctx, sid)
 	return req.WithContext(ctx)
 }
 

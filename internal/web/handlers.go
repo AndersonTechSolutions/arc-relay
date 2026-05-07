@@ -291,6 +291,21 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 				return t.UTC().Format("2006-01-02")
 			}
 		},
+		"timeAgo": func(t time.Time) string {
+			d := time.Since(t)
+			switch {
+			case d < time.Minute:
+				return "just now"
+			case d < time.Hour:
+				return fmt.Sprintf("%dm ago", int(d.Minutes()))
+			case d < 24*time.Hour:
+				return fmt.Sprintf("%dh ago", int(d.Hours()))
+			case d < 14*24*time.Hour:
+				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+			default:
+				return t.UTC().Format("2006-01-02")
+			}
+		},
 		"pages": func(current, total int) []int {
 			// Returns page numbers to display, with -1 for ellipsis
 			if total <= 7 {
@@ -675,44 +690,105 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
 	isAdmin := user.Role == "admin"
 
+	// Tile: Skills
+	var skillTotal, skillPublic, skillRestricted int
+	if isAdmin {
+		allSkills, _ := h.skillStore.ListSkills()
+		for _, sk := range allSkills {
+			if sk.YankedAt != nil {
+				continue
+			}
+			skillTotal++
+			if sk.Visibility == "public" {
+				skillPublic++
+			} else {
+				skillRestricted++
+			}
+		}
+	} else {
+		assigned, _ := h.skillStore.AssignedForUser(user.ID)
+		for _, a := range assigned {
+			skillTotal++
+			if a.Skill.Visibility == "public" {
+				skillPublic++
+			} else {
+				skillRestricted++
+			}
+		}
+	}
+
+	// Tile: Recipes
+	var recipeTotal, recipePublic, recipeRestricted int
+	if isAdmin {
+		allRecipes, _ := h.recipeStore.ListRecipes()
+		for _, r := range allRecipes {
+			if r.YankedAt != nil {
+				continue
+			}
+			recipeTotal++
+			if r.Visibility == "public" {
+				recipePublic++
+			} else {
+				recipeRestricted++
+			}
+		}
+	} else {
+		assigned, _ := h.recipeStore.AssignedForUser(user.ID)
+		for _, a := range assigned {
+			recipeTotal++
+			if a.Recipe.Visibility == "public" {
+				recipePublic++
+			} else {
+				recipeRestricted++
+			}
+		}
+	}
+
+	// Tile: MCP Servers
 	allServers, _ := h.servers.List()
 	servers := h.accessibleServers(user, allServers)
-
-	runningCount := 0
-	endpointCounts := make(map[string]int) // server ID -> tool count
+	var serversRunning, serversError, serversStopped int
 	for _, s := range servers {
-		if s.Status == store.StatusRunning {
-			runningCount++
-		}
-		if ep := h.proxy.Endpoints.Get(s.ID); ep != nil {
-			endpointCounts[s.ID] = len(ep.Tools) + len(ep.Resources) + len(ep.Prompts)
+		switch s.Status {
+		case store.StatusRunning:
+			serversRunning++
+		case store.StatusStopped:
+			serversStopped++
+		default:
+			serversError++
 		}
 	}
 
-	data := map[string]any{
-		"Nav":            "dashboard",
-		"User":           user,
-		"Servers":        servers,
-		"RunningCount":   runningCount,
-		"EndpointCounts": endpointCounts,
-		"IsAdmin":        isAdmin,
-	}
-
-	// Admin-only data: stats, logs, user count
+	// Tile: Devices (admin only)
+	var devicesTotal, devicesActive int
 	if isAdmin {
-		users, _ := h.users.List()
-		data["UserCount"] = len(users)
-		if h.requestLogs != nil {
-			stats, _ := h.requestLogs.Stats()
-			recentLogs, _ := h.requestLogs.Recent(10)
-			serverCallCounts, _ := h.requestLogs.ServerTotalCounts()
-			data["Stats"] = stats
-			data["RecentLogs"] = recentLogs
-			data["ServerCallCounts"] = serverCallCounts
-		}
+		devicesTotal, devicesActive, _ = h.users.CountActiveAPIKeys(time.Hour)
 	}
 
-	h.render(w, r, "dashboard.html", data)
+	// Activity feed
+	feed := buildActivityFeed(
+		activityStores{skills: h.skillStore, recipes: h.recipeStore, users: h.users},
+		user, 50,
+	)
+
+	h.render(w, r, "dashboard.html", map[string]any{
+		"Nav":               "dashboard",
+		"User":              user,
+		"IsAdmin":           isAdmin,
+		"SkillTotal":        skillTotal,
+		"SkillPublic":       skillPublic,
+		"SkillRestricted":   skillRestricted,
+		"RecipeTotal":       recipeTotal,
+		"RecipePublic":      recipePublic,
+		"RecipeRestricted":  recipeRestricted,
+		"ServerTotal":       len(servers),
+		"ServersRunning":    serversRunning,
+		"ServersError":      serversError,
+		"ServersStopped":    serversStopped,
+		"DevicesTotal":      devicesTotal,
+		"DevicesActive":     devicesActive,
+		"ActivityFeed":      feed,
+	})
 }
 
 // --- Logs ---

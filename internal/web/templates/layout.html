@@ -228,6 +228,19 @@
       .btn { font-size: 0.8rem; height: 2.2rem; padding: 0 0.75rem; }
       .btn-sm { height: 1.8rem; padding: 0 0.6rem; }
     }
+
+    .tile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+    .tile { display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; text-decoration: none; color: var(--text); transition: border-color 0.15s, box-shadow 0.15s; }
+    .tile:hover { border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-decoration: none; }
+    .tile-number { font-size: 2.5rem; font-weight: 700; line-height: 1; margin-bottom: 0.25rem; color: var(--primary); }
+    .tile-label { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .tile-sub { font-size: 0.8rem; color: var(--text-muted); }
+    .activity-feed { display: flex; flex-direction: column; gap: 0.5rem; }
+    .activity-row { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .activity-row:last-child { border-bottom: none; }
+    .activity-pill { font-size: 1rem; flex-shrink: 0; }
+    .activity-desc { flex: 1; }
+    .activity-time { color: var(--text-muted); font-size: 0.8rem; white-space: nowrap; flex-shrink: 0; }
   </style>
 </head>
 <body>
