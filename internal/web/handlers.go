@@ -843,13 +843,44 @@ func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleServersList(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
 	isAdmin := user.Role == "admin"
+
 	allServers, _ := h.servers.List()
 	servers := h.accessibleServers(user, allServers)
+
+	var running, errored, stopped int
+	endpointCounts := make(map[string]int)
+	for _, s := range servers {
+		switch s.Status {
+		case store.StatusRunning:
+			running++
+		case store.StatusStopped:
+			stopped++
+		default:
+			errored++
+		}
+		if h.proxy != nil {
+			if ep := h.proxy.Endpoints.Get(s.ID); ep != nil {
+				endpointCounts[s.ID] = len(ep.Tools) + len(ep.Resources) + len(ep.Prompts)
+			}
+		}
+	}
+
+	serverCallCounts := map[string]int{}
+	if isAdmin && h.requestLogs != nil {
+		serverCallCounts, _ = h.requestLogs.ServerTotalCounts()
+	}
+
 	h.render(w, r, "servers.html", map[string]any{
-		"Nav":     "servers",
-		"User":    user,
-		"IsAdmin": isAdmin,
-		"Servers": servers,
+		"Nav":              "servers",
+		"User":             user,
+		"IsAdmin":          isAdmin,
+		"Servers":          servers,
+		"ServerTotal":      len(servers),
+		"ServersRunning":   running,
+		"ServersError":     errored,
+		"ServersStopped":   stopped,
+		"EndpointCounts":   endpointCounts,
+		"ServerCallCounts": serverCallCounts,
 	})
 }
 

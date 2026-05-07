@@ -2,6 +2,84 @@
 {{define "content"}}
 <div class="page-header">
   <h2>MCP Servers</h2>
+  {{if .IsAdmin}}<a href="/servers/new" class="btn btn-primary">Add Server</a>{{end}}
 </div>
-<p style="color:var(--text-muted)">Server management coming soon.</p>
+
+<div class="summary-bar card">
+  <span class="summary-stat"><strong>{{.ServerTotal}}</strong> total</span>
+  <span class="summary-sep">·</span>
+  <span class="summary-stat"><strong>{{.ServersRunning}}</strong> running</span>
+  <span class="summary-sep">·</span>
+  <span class="summary-stat"><strong>{{.ServersError}}</strong> errored</span>
+  <span class="summary-sep">·</span>
+  <span class="summary-stat"><strong>{{.ServersStopped}}</strong> stopped</span>
+</div>
+
+<div class="card">
+  {{if .Servers}}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Endpoints</th>
+        {{if $.IsAdmin}}<th>Total Calls</th>{{end}}
+        <th>Proxy URL</th>
+        {{if $.IsAdmin}}<th>Actions</th>{{end}}
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Servers}}
+      <tr>
+        <td><a href="/servers/{{.ID}}">{{.DisplayName}}</a></td>
+        <td><span class="badge badge-{{.ServerType}}">{{.ServerType}}</span></td>
+        <td>
+          <span class="badge badge-{{.Status}}">{{.Status}}</span>
+          {{if eq (printf "%s" .Status) "running"}}<span class="health-dot health-dot-{{.Health}}" title="MCP health: {{.Health}}{{if .HealthError}} - {{.HealthError}}{{end}}"></span>{{end}}
+        </td>
+        <td>{{with index $.EndpointCounts .ID}}{{.}}{{else}}-{{end}}</td>
+        {{if $.IsAdmin}}<td>{{with index $.ServerCallCounts .ID}}{{.}}{{else}}0{{end}}</td>{{end}}
+        <td><code>/mcp/{{.Name}}</code></td>
+        {{if $.IsAdmin}}
+        <td>
+          <div class="actions">
+            {{if eq (printf "%s" .Status) "stopped"}}
+            <form method="POST" action="/servers/{{.ID}}/start" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button type="submit" class="btn btn-success btn-sm">Start</button>
+            </form>
+            {{else if eq (printf "%s" .Status) "running"}}
+            <form method="POST" action="/servers/{{.ID}}/stop" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button type="submit" class="btn btn-outline btn-sm">Stop</button>
+            </form>
+            {{else if eq (printf "%s" .Status) "error"}}
+            <form method="POST" action="/servers/{{.ID}}/start" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button type="submit" class="btn btn-success btn-sm">Restart</button>
+            </form>
+            {{end}}
+            <a href="/servers/{{.ID}}" class="btn btn-outline btn-sm">Details</a>
+          </div>
+        </td>
+        {{end}}
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <div class="empty-state">
+    {{if .IsAdmin}}
+    <h3>Get Started</h3>
+    <p>No MCP servers configured yet.</p>
+    <a href="/servers/new" class="btn btn-primary">Add Your First Server</a>
+    {{else}}
+    <p>No MCP servers available for your profile.</p>
+    {{end}}
+  </div>
+  {{end}}
+</div>
 {{end}}
