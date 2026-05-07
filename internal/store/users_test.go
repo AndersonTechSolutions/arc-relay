@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/testutil"
@@ -325,6 +326,59 @@ func TestValidateAPIKeyInvalid(t *testing.T) {
 	}
 	if ak != nil {
 		t.Error("ValidateAPIKey() should return nil api_key for nonexistent key")
+	}
+}
+
+func TestCountActiveAPIKeys(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	st := store.NewUserStore(db)
+	u, _ := st.Create("device-user", "pw", "user")
+
+	_, k1, _ := st.CreateAPIKey(u.ID, "key1", nil, nil)
+	_, k2, _ := st.CreateAPIKey(u.ID, "key2", nil, nil)
+
+	now := time.Now()
+	_, _ = db.Exec(`UPDATE api_keys SET last_used = ? WHERE id = ?`, now, k1.ID)
+	_, _ = db.Exec(`UPDATE api_keys SET last_used = ? WHERE id = ?`, now.Add(-2*time.Hour), k2.ID)
+
+	total, active, err := st.CountActiveAPIKeys(time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Errorf("want total=2, got %d", total)
+	}
+	if active != 1 {
+		t.Errorf("want active=1 (only k1 within last hour), got %d", active)
+	}
+}
+
+func TestListAllAPIKeys(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	st := store.NewUserStore(db)
+
+	alice, _ := st.Create("lak-alice", "pw", "user")
+	bob, _ := st.Create("lak-bob", "pw", "user")
+
+	_, ka, _ := st.CreateAPIKey(alice.ID, "alice-key", nil, nil)
+	_, _, _ = st.CreateAPIKey(bob.ID, "bob-key", nil, nil)
+
+	// Alice's key recently used; Bob's never used.
+	_, _ = db.Exec(`UPDATE api_keys SET last_used = ? WHERE id = ?`, time.Now(), ka.ID)
+
+	keys, err := st.ListAllAPIKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("want 2 keys, got %d", len(keys))
+	}
+	// Recently-used key (alice's) must come first.
+	if keys[0].OwnerUsername != "lak-alice" {
+		t.Errorf("want lak-alice first, got %s", keys[0].OwnerUsername)
+	}
+	if keys[1].OwnerUsername != "lak-bob" {
+		t.Errorf("want lak-bob second, got %s", keys[1].OwnerUsername)
 	}
 }
 

@@ -307,3 +307,108 @@ func (s *SetupRecipeStore) scanRecipeRow(row *sql.Row) (*SetupRecipe, error) {
 	}
 	return r, err
 }
+
+// RecentRecipeRow is returned by RecentRecipes.
+type RecentRecipeRow struct {
+	RecipeID   string
+	Slug       string
+	Visibility string
+	CreatedBy  *string
+	CreatedAt  time.Time
+}
+
+// RecentRecipes returns non-yanked recipes created within the since window, newest-first.
+func (s *SetupRecipeStore) RecentRecipes(limit int, since time.Time) ([]*RecentRecipeRow, error) {
+	rows, err := s.db.Query(`
+		SELECT id, slug, visibility, created_by, created_at
+		FROM setup_recipes
+		WHERE created_at >= ? AND yanked_at IS NULL
+		ORDER BY created_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent recipes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentRecipeRow
+	for rows.Next() {
+		r := &RecentRecipeRow{}
+		var by sql.NullString
+		if err := rows.Scan(&r.RecipeID, &r.Slug, &r.Visibility, &by, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning recent recipe: %w", err)
+		}
+		if by.Valid {
+			r.CreatedBy = &by.String
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentRecipeYankRow is returned by RecentRecipeYanks.
+type RecentRecipeYankRow struct {
+	RecipeID   string
+	Slug       string
+	Visibility string
+	YankedAt   time.Time
+}
+
+// RecentRecipeYanks returns recipes yanked within the since window, newest-first.
+func (s *SetupRecipeStore) RecentRecipeYanks(limit int, since time.Time) ([]*RecentRecipeYankRow, error) {
+	rows, err := s.db.Query(`
+		SELECT id, slug, visibility, yanked_at
+		FROM setup_recipes
+		WHERE yanked_at IS NOT NULL AND yanked_at >= ?
+		ORDER BY yanked_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent recipe yanks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentRecipeYankRow
+	for rows.Next() {
+		r := &RecentRecipeYankRow{}
+		var yankedAt sql.NullTime
+		if err := rows.Scan(&r.RecipeID, &r.Slug, &r.Visibility, &yankedAt); err != nil {
+			return nil, fmt.Errorf("scanning recipe yank: %w", err)
+		}
+		if yankedAt.Valid {
+			r.YankedAt = yankedAt.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentRecipeAssignmentRow is returned by RecentRecipeAssignments.
+type RecentRecipeAssignmentRow struct {
+	RecipeID   string
+	Slug       string
+	Visibility string
+	UserID     string
+	AssignedAt time.Time
+}
+
+// RecentRecipeAssignments returns recipe assignments made within the since window, newest-first,
+// joined to slug and visibility for per-viewer filtering.
+func (s *SetupRecipeStore) RecentRecipeAssignments(limit int, since time.Time) ([]*RecentRecipeAssignmentRow, error) {
+	rows, err := s.db.Query(`
+		SELECT ra.recipe_id, r.slug, r.visibility, ra.user_id, ra.assigned_at
+		FROM setup_recipe_assignments ra
+		JOIN setup_recipes r ON ra.recipe_id = r.id
+		WHERE ra.assigned_at >= ?
+		ORDER BY ra.assigned_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent recipe assignments: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentRecipeAssignmentRow
+	for rows.Next() {
+		r := &RecentRecipeAssignmentRow{}
+		if err := rows.Scan(&r.RecipeID, &r.Slug, &r.Visibility, &r.UserID, &r.AssignedAt); err != nil {
+			return nil, fmt.Errorf("scanning recipe assignment row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

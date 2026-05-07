@@ -614,6 +614,64 @@ func TestSkillUpstream_UpdateUpstreamCheck(t *testing.T) {
 	}
 }
 
+func TestRecentSkillVersions(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	st := store.NewSkillStore(db)
+
+	sk := &store.Skill{Slug: "rv-skill", DisplayName: "RV", Description: "", Visibility: "public"}
+	if err := st.CreateSkill(sk); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	_, err := db.Exec(`INSERT INTO skill_versions
+		(skill_id, version, archive_path, archive_size, archive_sha256, uploaded_at)
+		VALUES (?, '1.0.0', 'p', 1, 'x', ?)`, sk.ID, time.Now())
+	if err != nil {
+		t.Fatalf("insert skill_version: %v", err)
+	}
+
+	rows, err := st.RecentSkillVersions(50, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1, got %d", len(rows))
+	}
+	if rows[0].Slug != "rv-skill" || rows[0].Version != "1.0.0" {
+		t.Errorf("unexpected row: %+v", rows[0])
+	}
+}
+
+func TestRecentDrift(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	st := store.NewSkillStore(db)
+
+	sk := &store.Skill{Slug: "drifting", DisplayName: "D", Description: "", Visibility: "public"}
+	if err := st.CreateSkill(sk); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	now := time.Now()
+	sev := "minor"
+	_, err := db.Exec(`INSERT INTO skill_upstreams
+		(skill_id, upstream_type, git_url, git_subpath, git_ref,
+		 drift_detected_at, drift_severity, created_at, updated_at)
+		VALUES (?, 'git', 'https://x', '', 'main', ?, ?, ?, ?)`,
+		sk.ID, now, sev, now, now)
+	if err != nil {
+		t.Fatalf("insert upstream: %v", err)
+	}
+
+	rows, err := st.RecentDrift(50, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 drift row, got %d", len(rows))
+	}
+	if rows[0].Slug != "drifting" || rows[0].Severity == nil || *rows[0].Severity != "minor" {
+		t.Errorf("unexpected row: %+v", rows[0])
+	}
+}
+
 func TestSkillUpstream_WriteAndClearDriftReport(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	skills := store.NewSkillStore(db)

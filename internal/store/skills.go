@@ -693,6 +693,156 @@ func (s *SkillStore) ClearDriftReport(skillID, latestSeenHash string) error {
 	return nil
 }
 
+// RecentSkillVersionRow is returned by RecentSkillVersions.
+type RecentSkillVersionRow struct {
+	SkillID    string
+	Slug       string
+	Visibility string
+	Version    string
+	UploadedBy *string
+	UploadedAt time.Time
+}
+
+// RecentSkillVersions returns non-yanked skill version uploads within the since window, ordered newest-first.
+func (s *SkillStore) RecentSkillVersions(limit int, since time.Time) ([]*RecentSkillVersionRow, error) {
+	rows, err := s.db.Query(`
+		SELECT sv.skill_id, sk.slug, sk.visibility,
+		       sv.version, sv.uploaded_by, sv.uploaded_at
+		FROM skill_versions sv
+		JOIN skills sk ON sv.skill_id = sk.id
+		WHERE sv.uploaded_at >= ? AND sv.yanked_at IS NULL AND sk.yanked_at IS NULL
+		ORDER BY sv.uploaded_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent skill versions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentSkillVersionRow
+	for rows.Next() {
+		r := &RecentSkillVersionRow{}
+		var by sql.NullString
+		if err := rows.Scan(&r.SkillID, &r.Slug, &r.Visibility, &r.Version, &by, &r.UploadedAt); err != nil {
+			return nil, fmt.Errorf("scanning skill version row: %w", err)
+		}
+		if by.Valid {
+			r.UploadedBy = &by.String
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentSkillYankRow is returned by RecentSkillYanks.
+type RecentSkillYankRow struct {
+	SkillID    string
+	Slug       string
+	Visibility string
+	YankedAt   time.Time
+}
+
+// RecentSkillYanks returns skills yanked within the since window, newest-first.
+func (s *SkillStore) RecentSkillYanks(limit int, since time.Time) ([]*RecentSkillYankRow, error) {
+	rows, err := s.db.Query(`
+		SELECT id, slug, visibility, yanked_at
+		FROM skills
+		WHERE yanked_at IS NOT NULL AND yanked_at >= ?
+		ORDER BY yanked_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent skill yanks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentSkillYankRow
+	for rows.Next() {
+		r := &RecentSkillYankRow{}
+		var yankedAt sql.NullTime
+		if err := rows.Scan(&r.SkillID, &r.Slug, &r.Visibility, &yankedAt); err != nil {
+			return nil, fmt.Errorf("scanning skill yank row: %w", err)
+		}
+		if yankedAt.Valid {
+			r.YankedAt = yankedAt.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentDriftRow is returned by RecentDrift.
+type RecentDriftRow struct {
+	SkillID    string
+	Slug       string
+	Visibility string
+	Severity   *string
+	DriftAt    time.Time
+}
+
+// RecentDrift returns skills with drift detected within the since window, newest-first.
+func (s *SkillStore) RecentDrift(limit int, since time.Time) ([]*RecentDriftRow, error) {
+	rows, err := s.db.Query(`
+		SELECT su.skill_id, sk.slug, sk.visibility,
+		       su.drift_severity, su.drift_detected_at
+		FROM skill_upstreams su
+		JOIN skills sk ON su.skill_id = sk.id
+		WHERE su.drift_detected_at IS NOT NULL AND su.drift_detected_at >= ?
+		ORDER BY su.drift_detected_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent drift: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentDriftRow
+	for rows.Next() {
+		r := &RecentDriftRow{}
+		var sev sql.NullString
+		var driftAt sql.NullTime
+		if err := rows.Scan(&r.SkillID, &r.Slug, &r.Visibility, &sev, &driftAt); err != nil {
+			return nil, fmt.Errorf("scanning drift row: %w", err)
+		}
+		if sev.Valid {
+			r.Severity = &sev.String
+		}
+		if driftAt.Valid {
+			r.DriftAt = driftAt.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentSkillAssignmentRow is returned by RecentSkillAssignments.
+type RecentSkillAssignmentRow struct {
+	SkillID    string
+	Slug       string
+	Visibility string
+	UserID     string
+	AssignedAt time.Time
+}
+
+// RecentSkillAssignments returns skill assignments made within the since window, newest-first,
+// joined to the skill's slug and visibility for per-viewer filtering.
+func (s *SkillStore) RecentSkillAssignments(limit int, since time.Time) ([]*RecentSkillAssignmentRow, error) {
+	rows, err := s.db.Query(`
+		SELECT sa.skill_id, sk.slug, sk.visibility, sa.user_id, sa.assigned_at
+		FROM skill_assignments sa
+		JOIN skills sk ON sa.skill_id = sk.id
+		WHERE sa.assigned_at >= ?
+		ORDER BY sa.assigned_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent skill assignments: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentSkillAssignmentRow
+	for rows.Next() {
+		r := &RecentSkillAssignmentRow{}
+		if err := rows.Scan(&r.SkillID, &r.Slug, &r.Visibility, &r.UserID, &r.AssignedAt); err != nil {
+			return nil, fmt.Errorf("scanning skill assignment row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // scanUpstream reads one row off a rows.Scan-compatible iterator into a SkillUpstream.
 func scanUpstream(scanner interface {
 	Scan(dest ...any) error

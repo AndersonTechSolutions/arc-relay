@@ -530,3 +530,136 @@ func (s *UserStore) RevokeAPIKey(id string) error {
 	_, err := s.db.Exec("UPDATE api_keys SET revoked = TRUE WHERE id = ?", id)
 	return err
 }
+
+// RecentUserRow is returned by RecentUsers.
+type RecentUserRow struct {
+	UserID    string
+	Username  string
+	CreatedAt time.Time
+}
+
+// RecentUsers returns users created within the since window, newest-first.
+func (s *UserStore) RecentUsers(limit int, since time.Time) ([]*RecentUserRow, error) {
+	rows, err := s.db.Query(`
+		SELECT id, username, created_at FROM users
+		WHERE created_at >= ?
+		ORDER BY created_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentUserRow
+	for rows.Next() {
+		r := &RecentUserRow{}
+		if err := rows.Scan(&r.UserID, &r.Username, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning recent user: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentAPIKeyRow is returned by RecentAPIKeys.
+type RecentAPIKeyRow struct {
+	KeyID        string
+	UserID       string
+	KeyName      string
+	Username     string
+	Capabilities []string
+	CreatedAt    time.Time
+}
+
+// RecentAPIKeys returns API keys created within the since window, newest-first,
+// with the owning user's username joined in.
+func (s *UserStore) RecentAPIKeys(limit int, since time.Time) ([]*RecentAPIKeyRow, error) {
+	rows, err := s.db.Query(`
+		SELECT ak.id, ak.user_id, ak.name, COALESCE(u.username, ''),
+		       ak.capabilities, ak.created_at
+		FROM api_keys ak
+		LEFT JOIN users u ON ak.user_id = u.id
+		WHERE ak.created_at >= ?
+		ORDER BY ak.created_at DESC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent api keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*RecentAPIKeyRow
+	for rows.Next() {
+		r := &RecentAPIKeyRow{}
+		var capsJSON sql.NullString
+		if err := rows.Scan(&r.KeyID, &r.UserID, &r.KeyName, &r.Username, &capsJSON, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning recent api key: %w", err)
+		}
+		if capsJSON.Valid {
+			caps, _ := unmarshalCapabilities(capsJSON.String)
+			r.Capabilities = caps
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CountActiveAPIKeys returns the total count of non-revoked keys with a last_used timestamp
+// (total) and those with last_used within window of now (active).
+func (s *UserStore) CountActiveAPIKeys(window time.Duration) (total, active int, err error) {
+	row := s.db.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE last_used IS NOT NULL AND revoked = 0`)
+	if err = row.Scan(&total); err != nil {
+		return 0, 0, fmt.Errorf("counting total devices: %w", err)
+	}
+	since := time.Now().Add(-window)
+	row = s.db.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE last_used >= ? AND revoked = 0`, since)
+	if err = row.Scan(&active); err != nil {
+		return 0, 0, fmt.Errorf("counting active devices: %w", err)
+	}
+	return total, active, nil
+}
+
+// APIKeyWithOwner extends APIKey with the owning user's username, used by the admin fleet view.
+type APIKeyWithOwner struct {
+	APIKey
+	OwnerUsername string
+}
+
+// ListAllAPIKeys returns all API keys across all users, with owner username and
+// profile name joined in. Sorted: most-recently-active first, never-used last.
+func (s *UserStore) ListAllAPIKeys() ([]*APIKeyWithOwner, error) {
+	rows, err := s.db.Query(`
+		SELECT ak.id, ak.user_id, COALESCE(u.username, '') AS owner_username,
+		       ak.name, ak.profile_id, COALESCE(ap.name, ''),
+		       ak.created_at, ak.last_used, ak.revoked, ak.capabilities
+		FROM api_keys ak
+		LEFT JOIN users u ON ak.user_id = u.id
+		LEFT JOIN agent_profiles ap ON ak.profile_id = ap.id
+		ORDER BY CASE WHEN ak.last_used IS NULL THEN 1 ELSE 0 END,
+		         ak.last_used DESC, ak.created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing all api keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*APIKeyWithOwner
+	for rows.Next() {
+		k := &APIKeyWithOwner{}
+		var profileID sql.NullString
+		var capsJSON sql.NullString
+		var lastUsed sql.NullTime
+		if err := rows.Scan(&k.ID, &k.UserID, &k.OwnerUsername, &k.Name,
+			&profileID, &k.ProfileName, &k.CreatedAt, &lastUsed, &k.Revoked, &capsJSON); err != nil {
+			return nil, fmt.Errorf("scanning api key with owner: %w", err)
+		}
+		if profileID.Valid {
+			k.ProfileID = &profileID.String
+		}
+		if lastUsed.Valid {
+			t := lastUsed.Time
+			k.LastUsed = &t
+		}
+		if capsJSON.Valid {
+			caps, _ := unmarshalCapabilities(capsJSON.String)
+			k.Capabilities = caps
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
