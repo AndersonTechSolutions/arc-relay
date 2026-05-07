@@ -291,21 +291,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 				return t.UTC().Format("2006-01-02")
 			}
 		},
-		"timeAgo": func(t time.Time) string {
-			d := time.Since(t)
-			switch {
-			case d < time.Minute:
-				return "just now"
-			case d < time.Hour:
-				return fmt.Sprintf("%dm ago", int(d.Minutes()))
-			case d < 24*time.Hour:
-				return fmt.Sprintf("%dh ago", int(d.Hours()))
-			case d < 14*24*time.Hour:
-				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-			default:
-				return t.UTC().Format("2006-01-02")
-			}
-		},
+		"timeAgo": timeAgoStr,
 		"pages": func(current, total int) []int {
 			// Returns page numbers to display, with -1 for ellipsis
 			if total <= 7 {
@@ -370,6 +356,9 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	h.tmpls["skills.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/skills.html"))
 	h.tmpls["skill_detail.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/skill_detail.html"))
 	h.tmpls["skill_new.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/skill_new.html"))
+
+	// Servers list page.
+	h.tmpls["servers.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/servers.html"))
 
 	// Setup-recipe registry dashboard (Phase 2 of recipes).
 	h.tmpls["recipes.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/recipes.html"))
@@ -852,7 +841,16 @@ func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 // --- Servers ---
 
 func (h *Handlers) handleServersList(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/", http.StatusFound)
+	user := getUser(r)
+	isAdmin := user.Role == "admin"
+	allServers, _ := h.servers.List()
+	servers := h.accessibleServers(user, allServers)
+	h.render(w, r, "servers.html", map[string]any{
+		"Nav":     "servers",
+		"User":    user,
+		"IsAdmin": isAdmin,
+		"Servers": servers,
+	})
 }
 
 func (h *Handlers) handleServerNew(w http.ResponseWriter, r *http.Request) {
@@ -2878,6 +2876,23 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 }
 
 // --- Helpers ---
+
+// timeAgoStr renders a time as a compact relative string (e.g. "5m ago", "2h ago").
+func timeAgoStr(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 14*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.UTC().Format("2006-01-02")
+	}
+}
 
 func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, data map[string]any) {
 	t, ok := h.tmpls[name]

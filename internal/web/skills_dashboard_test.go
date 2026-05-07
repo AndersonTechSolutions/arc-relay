@@ -3,14 +3,12 @@ package web
 import (
 	"bytes"
 	"crypto/rand"
-	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -62,21 +60,7 @@ func newDashRig(t *testing.T) *dashRig {
 			}
 			return *s
 		},
-		"timeAgo": func(t time.Time) string {
-			d := time.Since(t)
-			switch {
-			case d < time.Minute:
-				return "just now"
-			case d < time.Hour:
-				return fmt.Sprintf("%dm ago", int(d.Minutes()))
-			case d < 24*time.Hour:
-				return fmt.Sprintf("%dh ago", int(d.Hours()))
-			case d < 14*24*time.Hour:
-				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-			default:
-				return t.UTC().Format("2006-01-02")
-			}
-		},
+		"timeAgo": timeAgoStr,
 	}
 
 	h := &Handlers{
