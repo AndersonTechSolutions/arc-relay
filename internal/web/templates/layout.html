@@ -251,7 +251,7 @@
     <h1>Arc Relay</h1>
     <nav>
       <a href="/" {{if eq .Nav "dashboard"}}class="active"{{end}}>Dashboard</a>
-      {{if and .User (eq .User.Role "admin")}}<a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>Servers</a>{{end}}
+      {{if .User}}<a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>MCP Servers</a>{{end}}
       {{if and .User (eq .User.Role "admin")}}<a href="/logs" {{if eq .Nav "logs"}}class="active"{{end}}>Logs</a>{{end}}
       <a href="/memory" {{if eq .Nav "memory"}}class="active"{{end}}>Memory</a>
       <a href="/skills" {{if eq .Nav "skills"}}class="active"{{end}}>Skills</a>
