@@ -29,6 +29,9 @@ type ActivityEvent struct {
 }
 
 // Pill returns a display emoji for the event kind.
+// Collisions are intentional: skill_yanked and recipe_yanked both return "🚫",
+// and skill_assigned and recipe_assigned both return "🔑". The Subject field
+// provides disambiguation in the UI.
 func (e ActivityEvent) Pill() string {
 	switch e.Kind {
 	case "skill_published":
@@ -58,6 +61,10 @@ func (e ActivityEvent) Pill() string {
 // all nine event sources. Errors from individual sources are silently ignored
 // (best-effort feed). Results are capped at limit items, newest first.
 func buildActivityFeed(stores activityStores, viewer *store.User, limit int) []ActivityEvent {
+	if limit <= 0 {
+		return nil
+	}
+
 	since := time.Now().AddDate(0, 0, -30)
 
 	// Use a generous per-source fetch limit so filtering doesn't starve the result.
@@ -69,6 +76,10 @@ func buildActivityFeed(stores activityStores, viewer *store.User, limit int) []A
 	isAdmin := viewer.Role == "admin"
 
 	// Pre-compute accessible skill/recipe IDs for non-admins (O(1) lookup).
+	// AssignedForUser returns both public AND restricted assigned items, so the
+	// maps may contain public IDs. That is harmless: the filter checks
+	// r.Visibility != "public" first and short-circuits before reaching the map
+	// lookup for any public item, making the redundant entries a no-op.
 	accessibleSkillIDs := map[string]bool{}
 	accessibleRecipeIDs := map[string]bool{}
 	if !isAdmin {
@@ -108,6 +119,8 @@ func buildActivityFeed(stores activityStores, viewer *store.User, limit int) []A
 	}
 
 	// --- skill_yanked ---
+	// Note: r.Visibility reflects the current value at query time, not the value
+	// at yank time. This is acceptable for a best-effort feed (eventual consistency).
 	if yanks, err := stores.skills.RecentSkillYanks(fetchLimit, since); err == nil {
 		for _, r := range yanks {
 			if !isAdmin && r.Visibility != "public" && !accessibleSkillIDs[r.SkillID] {
@@ -183,6 +196,8 @@ func buildActivityFeed(stores activityStores, viewer *store.User, limit int) []A
 	}
 
 	// --- recipe_yanked ---
+	// Note: r.Visibility reflects the current value at query time, not the value
+	// at yank time. This is acceptable for a best-effort feed (eventual consistency).
 	if yanks, err := stores.recipes.RecentRecipeYanks(fetchLimit, since); err == nil {
 		for _, r := range yanks {
 			if !isAdmin && r.Visibility != "public" && !accessibleRecipeIDs[r.RecipeID] {

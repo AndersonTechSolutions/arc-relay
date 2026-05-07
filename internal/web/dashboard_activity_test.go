@@ -251,9 +251,9 @@ func TestBuildActivityFeed_AssignmentScopedToSelf(t *testing.T) {
 	}
 }
 
-// TestBuildActivityFeed_LimitAnd30DayClamp verifies that the result is capped
+// TestBuildActivityFeed_LimitCap verifies that the result is capped
 // at the limit parameter when more events exist.
-func TestBuildActivityFeed_LimitAnd30DayClamp(t *testing.T) {
+func TestBuildActivityFeed_LimitCap(t *testing.T) {
 	stores, skills, _, users := newActivityStores(t)
 
 	admin, err := users.Create("limit-admin", "pw", "admin")
