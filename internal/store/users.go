@@ -606,12 +606,12 @@ func (s *UserStore) RecentAPIKeys(limit int, since time.Time) ([]*RecentAPIKeyRo
 func (s *UserStore) CountActiveAPIKeys(window time.Duration) (total, active int, err error) {
 	row := s.db.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE last_used IS NOT NULL AND revoked = 0`)
 	if err = row.Scan(&total); err != nil {
-		return 0, 0, fmt.Errorf("counting total devices: %w", err)
+		return 0, 0, fmt.Errorf("counting total api keys: %w", err)
 	}
 	since := time.Now().Add(-window)
 	row = s.db.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE last_used >= ? AND revoked = 0`, since)
 	if err = row.Scan(&active); err != nil {
-		return 0, 0, fmt.Errorf("counting active devices: %w", err)
+		return 0, 0, fmt.Errorf("counting active api keys: %w", err)
 	}
 	return total, active, nil
 }
