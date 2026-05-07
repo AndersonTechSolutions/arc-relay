@@ -2418,7 +2418,7 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		if rawKey, ok := h.flashKeys.LoadAndDelete(nonce); ok {
 			data["NewKey"] = rawKey
 		} else {
-			data["Flash"] = "Your API key was created, but its secret value can no longer be displayed. Please revoke it and create a new one if needed."
+			data["Flash"] = &Flash{Type: "warning", Message: "Your API key was created, but its secret value can no longer be displayed. Please revoke it and create a new one if needed."}
 		}
 	}
 	h.render(w, r, "api_keys.html", data)
