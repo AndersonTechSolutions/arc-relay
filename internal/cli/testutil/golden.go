@@ -16,18 +16,18 @@ func GoldenFile(t *testing.T, name string, got []byte) {
 	golden := filepath.Join("testdata", "golden", name)
 
 	if *update {
-		err := os.MkdirAll(filepath.Dir(golden), 0755)
+		err := os.MkdirAll(filepath.Dir(golden), 0750)
 		if err != nil {
 			t.Fatalf("failed to create golden dir: %v", err)
 		}
-		err = os.WriteFile(golden, got, 0644)
+		err = os.WriteFile(golden, got, 0600)
 		if err != nil {
 			t.Fatalf("failed to write golden file: %v", err)
 		}
 		return
 	}
 
-	expected, err := os.ReadFile(golden)
+	expected, err := os.ReadFile(golden) // #nosec G304 — test-only helper; golden is "testdata/golden/" + a test-supplied constant name.
 	if err != nil {
 		t.Fatalf("failed to read golden file %s (run with -update to create): %v", golden, err)
 	}
