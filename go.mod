@@ -10,6 +10,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/moby/moby/api v1.53.0
 	github.com/moby/moby/client v0.1.0
+	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.53.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -30,7 +31,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
