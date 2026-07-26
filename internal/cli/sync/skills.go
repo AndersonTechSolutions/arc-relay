@@ -175,7 +175,10 @@ func (m *SkillManager) Install(slug, version string) (*SkillMarker, error) {
 		return nil, fmt.Errorf("mktemp: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(tmpDir) }
-	defer cleanup()
+	// Called through a wrapper so the success path's reassignment of cleanup
+	// is honoured. `defer cleanup()` would capture the current function value
+	// and keep removing tmpDir even after it was renamed into place.
+	defer func() { cleanup() }()
 
 	if err := extractTarGz(archive, tmpDir); err != nil {
 		return nil, fmt.Errorf("extract archive: %w", err)
@@ -395,7 +398,9 @@ func extractTarGz(archive []byte, dest string) error {
 			if err := os.MkdirAll(target, mode(hdr.Mode, 0o755)); err != nil {
 				return fmt.Errorf("mkdir %s: %w", target, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		// TypeRegA is not listed: archive/tar has normalized it to TypeReg
+		// on read since Go 1.11, and the constant is deprecated.
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return fmt.Errorf("mkdir parent %s: %w", target, err)
 			}
@@ -525,14 +530,27 @@ func parseFrontmatterName(skillMD []byte) string {
 
 // safeRelPath rejects paths that escape the destination via .. or absolute
 // roots. filepath.Clean has already been applied by the caller.
+//
+// Backslashes are treated as separators on every platform, not just Windows.
+// filepath.Clean (applied by the caller) is platform-specific and only folds
+// `\` on Windows, so checking the raw value against "../" let `..\escape.txt`
+// through everywhere else — which is why this reproduced solely on the Windows
+// CI runner. Deciding it here rather than deferring to filepath keeps the
+// verdict independent of GOOS: the same archive is judged the same way on
+// every platform, and tar's only defined separator is "/", so a backslash in
+// an entry name is anomalous regardless of who extracts it.
 func safeRelPath(p string) bool {
 	if p == "" || p == "." {
 		return false
 	}
-	if filepath.IsAbs(p) || strings.HasPrefix(p, "/") {
+	if filepath.IsAbs(p) {
 		return false
 	}
-	if p == ".." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") {
+	s := strings.ReplaceAll(p, `\`, "/")
+	if strings.HasPrefix(s, "/") {
+		return false
+	}
+	if s == ".." || strings.HasPrefix(s, "../") || strings.Contains(s, "/../") {
 		return false
 	}
 	return true
