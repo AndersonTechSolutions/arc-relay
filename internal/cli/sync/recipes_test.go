@@ -18,7 +18,7 @@ import (
 // produced. Tests can also pre-stage canned outputs and errors per command.
 type fakeRunner struct {
 	calls    [][]string
-	listJSON string         // canned response for `plugin list --json`
+	listJSON string           // canned response for `plugin list --json`
 	errs     map[string]error // command-prefix → error to return
 }
 

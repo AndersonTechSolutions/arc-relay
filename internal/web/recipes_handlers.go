@@ -274,7 +274,7 @@ func (h *RecipesHandlers) create(w http.ResponseWriter, r *http.Request, uploade
 type updateBody struct {
 	DisplayName string          `json:"display_name"`
 	Description string          `json:"description"`
-	Visibility  string          `json:"visibility"` // empty = preserve
+	Visibility  string          `json:"visibility"`  // empty = preserve
 	RecipeData  json.RawMessage `json:"recipe_data"` // empty = preserve
 }
 
@@ -369,7 +369,9 @@ func (h *RecipesHandlers) listAssignments(w http.ResponseWriter, recipe *store.S
 }
 
 // assignRecipe grants a user access to a restricted recipe. Body shape:
-//   {"username":"alice"}
+//
+//	{"username":"alice"}
+//
 // Idempotent: re-assigning replaces the prior grant.
 func (h *RecipesHandlers) assignRecipe(w http.ResponseWriter, r *http.Request, recipe *store.SetupRecipe, adminID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)

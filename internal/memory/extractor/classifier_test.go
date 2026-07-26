@@ -11,15 +11,15 @@ import (
 
 func TestNormalizeCategory(t *testing.T) {
 	cases := map[string]string{
-		"user":          "user",
-		"USER":          "user",
-		"  project ":    "project",
-		"feedback.":     "feedback",
-		"\"reference\"": "reference",
-		"none":          "none",
-		"none.":         "none",
-		"hobbies":       "none", // not in taxonomy
-		"":              "none",
+		"user":                       "user",
+		"USER":                       "user",
+		"  project ":                 "project",
+		"feedback.":                  "feedback",
+		"\"reference\"":              "reference",
+		"none":                       "none",
+		"none.":                      "none",
+		"hobbies":                    "none", // not in taxonomy
+		"":                           "none",
 		"user is the right category": "user", // takes first word
 		"random gibberish":           "none",
 		"projects":                   "none", // close-but-no-cigar

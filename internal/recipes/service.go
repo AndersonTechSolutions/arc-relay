@@ -30,9 +30,10 @@ var ErrRecipeNotFound = errors.New("recipe not found")
 // ClaudePluginRecipe is the recipe_data shape for recipe_type = "claude_plugin".
 //
 // The execution model on the client is roughly:
-//   claude plugin marketplace add <MarketplaceSource>
-//   claude plugin install <Plugin>      // typically "name@marketplace"
-//   if !Enabled { claude plugin disable <Plugin> }
+//
+//	claude plugin marketplace add <MarketplaceSource>
+//	claude plugin install <Plugin>      // typically "name@marketplace"
+//	if !Enabled { claude plugin disable <Plugin> }
 type ClaudePluginRecipe struct {
 	// MarketplaceSource is the argument to `claude plugin marketplace add`.
 	// Accepts a GitHub "owner/repo" reference, a git URL, or a local path.
@@ -218,10 +219,10 @@ func ValidateRecipeData(recipeType string, data json.RawMessage) (json.RawMessag
 }
 
 // validMarketplaceSource accepts:
-//  - GitHub shortform "owner/repo"
-//  - http(s):// or git:// or git@... URLs that parse cleanly
-//  - absolute local paths beginning with "/"
-//  - explicit "file://" URIs
+//   - GitHub shortform "owner/repo"
+//   - http(s):// or git:// or git@... URLs that parse cleanly
+//   - absolute local paths beginning with "/"
+//   - explicit "file://" URIs
 func validMarketplaceSource(src string) bool {
 	if strings.HasPrefix(src, "/") {
 		return true

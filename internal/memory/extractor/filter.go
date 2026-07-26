@@ -102,10 +102,10 @@ func isEnvelope(s string) bool {
 // FilterStats summarizes a filter pass. Returned by Filter() for diagnostics
 // and dry-run output.
 type FilterStats struct {
-	Total      int
-	KeptCount  int
-	ToolCount  int  // tier 1 drops
-	ShortCount int  // tier 2 drops
+	Total         int
+	KeptCount     int
+	ToolCount     int // tier 1 drops
+	ShortCount    int // tier 2 drops
 	EnvelopeCount int // tier 3 drops
 }
 

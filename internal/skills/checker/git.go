@@ -297,4 +297,3 @@ func gitEnv() []string {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 	)
 }
-

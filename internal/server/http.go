@@ -16,8 +16,8 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
-	"github.com/comma-compliance/arc-relay/internal/memory"
 	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
+	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
@@ -29,20 +29,20 @@ import (
 
 // Server is the main HTTP server for Arc Relay.
 type Server struct {
-	cfg             *config.Config
-	servers         *store.ServerStore
-	users           *store.UserStore
-	proxy           *proxy.Manager
-	oauthMgr        *oauth.Manager
-	accessStore     *store.AccessStore
-	profileStore    *store.ProfileStore
-	requestLogs     *store.RequestLogStore
-	sessionStore    *store.SessionStore
-	middlewareStore *store.MiddlewareStore
-	mwRegistry      *middleware.Registry
-	healthMon       *proxy.HealthMonitor
-	inviteStore     *store.InviteStore
-	oauthTokenStore *store.OAuthTokenStore
+	cfg                *config.Config
+	servers            *store.ServerStore
+	users              *store.UserStore
+	proxy              *proxy.Manager
+	oauthMgr           *oauth.Manager
+	accessStore        *store.AccessStore
+	profileStore       *store.ProfileStore
+	requestLogs        *store.RequestLogStore
+	sessionStore       *store.SessionStore
+	middlewareStore    *store.MiddlewareStore
+	mwRegistry         *middleware.Registry
+	healthMon          *proxy.HealthMonitor
+	inviteStore        *store.InviteStore
+	oauthTokenStore    *store.OAuthTokenStore
 	optimizeStore      *store.OptimizeStore
 	llmClient          *llm.Client
 	optimizer          *middleware.Optimizer
@@ -116,24 +116,24 @@ func (s *Server) routes() {
 
 	// Memory ingestion endpoint (API key auth only)
 	s.mux.Handle("/api/memory/ingest", apiAuth(http.HandlerFunc(s.memHandlers.HandleIngest)))
-	s.mux.Handle("/api/memory/search",    apiAuth(http.HandlerFunc(s.memHandlers.HandleSearch)))
-	s.mux.Handle("/api/memory/sessions",  apiAuth(http.HandlerFunc(s.memHandlers.HandleSessions)))
+	s.mux.Handle("/api/memory/search", apiAuth(http.HandlerFunc(s.memHandlers.HandleSearch)))
+	s.mux.Handle("/api/memory/sessions", apiAuth(http.HandlerFunc(s.memHandlers.HandleSessions)))
 	s.mux.Handle("/api/memory/sessions/", apiAuth(http.HandlerFunc(s.memHandlers.HandleSessionExtract)))
-	s.mux.Handle("/api/memory/stats",     apiAuth(http.HandlerFunc(s.memHandlers.HandleStats)))
-	s.mux.Handle("/api/memory/extract",   apiAuth(http.HandlerFunc(s.memHandlers.HandleExtract)))
+	s.mux.Handle("/api/memory/stats", apiAuth(http.HandlerFunc(s.memHandlers.HandleStats)))
+	s.mux.Handle("/api/memory/extract", apiAuth(http.HandlerFunc(s.memHandlers.HandleExtract)))
 
 	// Skill repository endpoints (API key auth only).
 	// /api/skills/assigned must register BEFORE /api/skills/ so the longer
 	// path wins the ServeMux match.
 	s.mux.Handle("/api/skills/assigned", apiAuth(http.HandlerFunc(s.skillHandlers.HandleAssigned)))
-	s.mux.Handle("/api/skills",          apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkills)))
-	s.mux.Handle("/api/skills/",         apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkillByPath)))
+	s.mux.Handle("/api/skills", apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkills)))
+	s.mux.Handle("/api/skills/", apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkillByPath)))
 
 	// Setup-recipe registry endpoints (API key auth only). Same routing
 	// gotcha as skills: /api/recipes/assigned ahead of /api/recipes/.
 	s.mux.Handle("/api/recipes/assigned", apiAuth(http.HandlerFunc(s.recipeHandlers.HandleAssigned)))
-	s.mux.Handle("/api/recipes",          apiAuth(http.HandlerFunc(s.recipeHandlers.HandleRecipes)))
-	s.mux.Handle("/api/recipes/",         apiAuth(http.HandlerFunc(s.recipeHandlers.HandleRecipeByPath)))
+	s.mux.Handle("/api/recipes", apiAuth(http.HandlerFunc(s.recipeHandlers.HandleRecipes)))
+	s.mux.Handle("/api/recipes/", apiAuth(http.HandlerFunc(s.recipeHandlers.HandleRecipeByPath)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

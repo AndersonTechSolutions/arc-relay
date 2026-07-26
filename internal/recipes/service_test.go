@@ -45,8 +45,8 @@ func TestValidateRecipeData_RejectsUnknownType(t *testing.T) {
 func TestValidateRecipeData_RequiredFields(t *testing.T) {
 	cases := []string{
 		`{}`,
-		`{"plugin":"x"}`,                       // no marketplace_source
-		`{"marketplace_source":"a/b"}`,          // no plugin
+		`{"plugin":"x"}`,                         // no marketplace_source
+		`{"marketplace_source":"a/b"}`,           // no plugin
 		`{"marketplace_source":"","plugin":"x"}`, // empty marketplace
 	}
 	for _, c := range cases {
@@ -59,13 +59,13 @@ func TestValidateRecipeData_RequiredFields(t *testing.T) {
 
 func TestValidateRecipeData_AcceptedSourceForms(t *testing.T) {
 	cases := []string{
-		"thedotmack/claude-mem",                                // github owner/repo
-		"https://github.com/X/Y",                               // https URL
-		"https://github.com/X/Y.git",                           // .git suffix
-		"git@github.com:X/Y.git",                               // ssh form
-		"git://example.com/X.git",                              // git protocol
-		"/Users/ian/code/local-marketplace",                    // absolute path
-		"file:///Users/ian/code/local",                         // file URL
+		"thedotmack/claude-mem",             // github owner/repo
+		"https://github.com/X/Y",            // https URL
+		"https://github.com/X/Y.git",        // .git suffix
+		"git@github.com:X/Y.git",            // ssh form
+		"git://example.com/X.git",           // git protocol
+		"/Users/ian/code/local-marketplace", // absolute path
+		"file:///Users/ian/code/local",      // file URL
 	}
 	for _, src := range cases {
 		body := `{"marketplace_source":` + jsonString(src) + `,"plugin":"x"}`
@@ -78,12 +78,12 @@ func TestValidateRecipeData_AcceptedSourceForms(t *testing.T) {
 
 func TestValidateRecipeData_RejectedSourceForms(t *testing.T) {
 	cases := []string{
-		"justrepo",                              // no slash
-		"too/many/slashes",                      // multiple slashes
-		"with space/repo",                       // whitespace
-		"-leadinghyphen/repo",                   // bad ident
-		"repo/",                                 // empty second component
-		"/justone",                              // path-prefix BUT also fails owner/repo, accepted via "starts with /" branch — wait this is actually accepted
+		"justrepo",            // no slash
+		"too/many/slashes",    // multiple slashes
+		"with space/repo",     // whitespace
+		"-leadinghyphen/repo", // bad ident
+		"repo/",               // empty second component
+		"/justone",            // path-prefix BUT also fails owner/repo, accepted via "starts with /" branch — wait this is actually accepted
 	}
 	// "/justone" is accepted via the absolute-path branch — remove from rejected list.
 	rejectable := cases[:5]

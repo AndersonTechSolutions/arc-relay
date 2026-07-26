@@ -1821,8 +1821,9 @@ func runMemory() {
 }
 
 // runMemoryExtract POSTs /api/memory/extract for one or more sessions.
-//   arc-sync memory extract <session-id>      # extract one session
-//   arc-sync memory extract --all-stale       # process every stale session
+//
+//	arc-sync memory extract <session-id>      # extract one session
+//	arc-sync memory extract --all-stale       # process every stale session
 func runMemoryExtract() {
 	if len(os.Args) < 4 {
 		fmt.Fprintln(os.Stderr, "usage: arc-sync memory extract <session-id|--all-stale>")

@@ -168,31 +168,31 @@ func newLoginRateLimiter() *loginRateLimiter {
 
 // Handlers holds dependencies for web UI handlers.
 type Handlers struct {
-	cfg             *config.Config
-	servers         *store.ServerStore
-	users           *store.UserStore
-	proxy           *proxy.Manager
-	oauth           *oauth.Manager
-	accessStore     *store.AccessStore
-	profileStore    *store.ProfileStore
-	requestLogs     *store.RequestLogStore
-	sessionStore    *store.SessionStore
-	middlewareStore *store.MiddlewareStore
-	mwRegistry      *middleware.Registry
-	healthMon       *proxy.HealthMonitor
-	catalogClient   *catalog.Client
-	deviceAuth      *deviceAuthStore
-	archiveHandoff  *archiveHandoffStore
-	inviteStore     *store.InviteStore
-	optimizeStore   *store.OptimizeStore
-	llmClient       *llm.Client
-	memSvc          *memory.Service
-	skillSvc        *skills.Service
-	skillStore      *store.SkillStore
-	recipeSvc       *recipes.Service
-	recipeStore     *store.SetupRecipeStore
-	oauthProv       *oauthProvider
-	tmpls           map[string]*template.Template
+	cfg                  *config.Config
+	servers              *store.ServerStore
+	users                *store.UserStore
+	proxy                *proxy.Manager
+	oauth                *oauth.Manager
+	accessStore          *store.AccessStore
+	profileStore         *store.ProfileStore
+	requestLogs          *store.RequestLogStore
+	sessionStore         *store.SessionStore
+	middlewareStore      *store.MiddlewareStore
+	mwRegistry           *middleware.Registry
+	healthMon            *proxy.HealthMonitor
+	catalogClient        *catalog.Client
+	deviceAuth           *deviceAuthStore
+	archiveHandoff       *archiveHandoffStore
+	inviteStore          *store.InviteStore
+	optimizeStore        *store.OptimizeStore
+	llmClient            *llm.Client
+	memSvc               *memory.Service
+	skillSvc             *skills.Service
+	skillStore           *store.SkillStore
+	recipeSvc            *recipes.Service
+	recipeStore          *store.SetupRecipeStore
+	oauthProv            *oauthProvider
+	tmpls                map[string]*template.Template
 	csrfSecret           []byte
 	loginLimiter         *loginRateLimiter
 	oauthRegisterLimiter *ipRateLimiter
@@ -212,31 +212,31 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		}
 	}
 	h := &Handlers{
-		cfg:             cfg,
-		servers:         servers,
-		users:           users,
-		proxy:           proxyMgr,
-		oauth:           oauthMgr,
-		accessStore:     accessStore,
-		profileStore:    profileStore,
-		requestLogs:     requestLogs,
-		sessionStore:    sessionStore,
-		middlewareStore: middlewareStore,
-		mwRegistry:      mwRegistry,
-		healthMon:       healthMon,
-		catalogClient:   catalog.NewClient(),
-		deviceAuth:      newDeviceAuthStore(),
-		archiveHandoff:  newArchiveHandoffStore(),
-		inviteStore:     inviteStore,
-		optimizeStore:   optimizeStore,
-		llmClient:       llmClient,
-		memSvc:          memSvc,
-		skillSvc:        skillSvc,
-		skillStore:      skillStore,
-		recipeSvc:       recipeSvc,
-		recipeStore:     recipeStore,
-		oauthProv:       newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
-		tmpls:           make(map[string]*template.Template),
+		cfg:                  cfg,
+		servers:              servers,
+		users:                users,
+		proxy:                proxyMgr,
+		oauth:                oauthMgr,
+		accessStore:          accessStore,
+		profileStore:         profileStore,
+		requestLogs:          requestLogs,
+		sessionStore:         sessionStore,
+		middlewareStore:      middlewareStore,
+		mwRegistry:           mwRegistry,
+		healthMon:            healthMon,
+		catalogClient:        catalog.NewClient(),
+		deviceAuth:           newDeviceAuthStore(),
+		archiveHandoff:       newArchiveHandoffStore(),
+		inviteStore:          inviteStore,
+		optimizeStore:        optimizeStore,
+		llmClient:            llmClient,
+		memSvc:               memSvc,
+		skillSvc:             skillSvc,
+		skillStore:           skillStore,
+		recipeSvc:            recipeSvc,
+		recipeStore:          recipeStore,
+		oauthProv:            newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
+		tmpls:                make(map[string]*template.Template),
 		csrfSecret:           csrfSecret,
 		loginLimiter:         newLoginRateLimiter(),
 		oauthRegisterLimiter: newIPRateLimiter(1*time.Hour, 10),
@@ -761,22 +761,22 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	)
 
 	h.render(w, r, "dashboard.html", map[string]any{
-		"Nav":               "dashboard",
-		"User":              user,
-		"IsAdmin":           isAdmin,
-		"SkillTotal":        skillTotal,
-		"SkillPublic":       skillPublic,
-		"SkillRestricted":   skillRestricted,
-		"RecipeTotal":       recipeTotal,
-		"RecipePublic":      recipePublic,
-		"RecipeRestricted":  recipeRestricted,
-		"ServerTotal":       len(servers),
-		"ServersRunning":    serversRunning,
-		"ServersError":      serversError,
-		"ServersStopped":    serversStopped,
-		"DevicesTotal":      devicesTotal,
-		"DevicesActive":     devicesActive,
-		"ActivityFeed":      feed,
+		"Nav":              "dashboard",
+		"User":             user,
+		"IsAdmin":          isAdmin,
+		"SkillTotal":       skillTotal,
+		"SkillPublic":      skillPublic,
+		"SkillRestricted":  skillRestricted,
+		"RecipeTotal":      recipeTotal,
+		"RecipePublic":     recipePublic,
+		"RecipeRestricted": recipeRestricted,
+		"ServerTotal":      len(servers),
+		"ServersRunning":   serversRunning,
+		"ServersError":     serversError,
+		"ServersStopped":   serversStopped,
+		"DevicesTotal":     devicesTotal,
+		"DevicesActive":    devicesActive,
+		"ActivityFeed":     feed,
 	})
 }
 

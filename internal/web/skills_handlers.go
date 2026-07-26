@@ -674,7 +674,9 @@ func (h *SkillsHandlers) listAssignments(w http.ResponseWriter, skill *store.Ski
 }
 
 // assignSkill grants a user access to a restricted skill. Body shape:
-//   {"username":"alice","version":"1.0.0"}
+//
+//	{"username":"alice","version":"1.0.0"}
+//
 // version is optional. Idempotent: re-assigning replaces the prior pin.
 func (h *SkillsHandlers) assignSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill, adminID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)

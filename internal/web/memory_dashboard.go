@@ -159,18 +159,18 @@ func (h *Handlers) HandleMemorySessions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	data := map[string]any{
-		"Nav":         "memory",
-		"User":        user,
-		"Sessions":    sessions,
-		"ProjectDir":  projectDir,
-		"Page":        page,
-		"TotalPages":  totalPages,
-		"TotalCount":  total,
-		"FilterQS":    filterQS,
-		"PrevPage":    page - 1,
-		"NextPage":    page + 1,
-		"HasPrev":     page > 1,
-		"HasNext":     page < totalPages,
+		"Nav":        "memory",
+		"User":       user,
+		"Sessions":   sessions,
+		"ProjectDir": projectDir,
+		"Page":       page,
+		"TotalPages": totalPages,
+		"TotalCount": total,
+		"FilterQS":   filterQS,
+		"PrevPage":   page - 1,
+		"NextPage":   page + 1,
+		"HasPrev":    page > 1,
+		"HasNext":    page < totalPages,
 	}
 	h.render(w, r, "memory_sessions.html", data)
 }
@@ -201,7 +201,7 @@ func (h *Handlers) HandleMemorySessionDetail(w http.ResponseWriter, r *http.Requ
 	// <details> block to keep the page navigable.
 	type messageView struct {
 		*store.Message
-		LongContent bool
+		LongContent  bool
 		ContentChars int
 	}
 	views := make([]messageView, len(msgs))

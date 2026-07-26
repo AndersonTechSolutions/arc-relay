@@ -216,11 +216,11 @@ func (h *Handlers) renderRecipeDetail(w http.ResponseWriter, r *http.Request, us
 	}
 
 	h.render(w, r, "recipe_detail.html", map[string]any{
-		"Nav":          "recipes",
-		"User":         user,
-		"Recipe":       recipe,
-		"PrettyData":   string(prettyData),
-		"Assignments":  assignments,
+		"Nav":         "recipes",
+		"User":        user,
+		"Recipe":      recipe,
+		"PrettyData":  string(prettyData),
+		"Assignments": assignments,
 	})
 }
 
