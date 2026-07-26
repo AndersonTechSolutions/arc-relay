@@ -63,6 +63,13 @@ All notable changes to Arc Relay (formerly MCP Wrangler) are documented here.
   - Migration 014: `tool_optimizations` table, `servers.optimize_enabled` column
 - `scripts/lint.sh` - local lint script mirroring CI checks
 
+### Fixed
+- **`arc-sync memory watch` no longer wedges on a large backlog** - the watcher POSTed the whole delta from its watermark to EOF in one request. The relay caps ingest bodies at 10 MiB, and a rejected POST must not advance the watermark, so any delta over the cap was re-sent in full on every 30s scan and that file never made progress again. Seen in production as 2,653 × 413 against 632 × 200 over seven days, traced to one transcript with a 69.5 MiB backlog. The trigger is not large files but large *gaps* — watcher downtime, or a reset state file, while a session keeps growing.
+  - Ingest now walks the delta in newline-aligned chunks of at most 4 MiB, advancing the watermark after each accepted chunk, so a backlog of any size drains a piece at a time. Chunks must be newline-aligned because the relay's parser is line-oriented and discards the fragments on both sides of a mid-record split.
+  - A 413 is now treated as permanent for those bytes and skipped, so one oversized record cannot stall every later record in the file. Other failures (network, auth, 5xx) still hold the watermark for retry. `postIngest` returns a typed `ingestHTTPError` so this is a status-code check rather than string matching.
+  - The watcher now stops at the last complete line. A transcript caught mid-append ended partway through a record; that fragment was sent *and* the watermark advanced past it, so the parser skipped both halves and the record was lost. Pre-existing bug, fixed here because chunking has to find line boundaries anyway.
+  - `MemoryWatcher.MaxChunkBytes` overrides the 4 MiB default (zero = default).
+
 ## [1.0.0] - 2026-04-01
 
 ### Changed
