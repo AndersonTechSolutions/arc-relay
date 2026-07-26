@@ -363,7 +363,10 @@ func (s *Service) writeArchive(rel string, b []byte) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
-	defer cleanup()
+	// Called through a wrapper so the success path's reassignment of cleanup
+	// is honoured. `defer cleanup()` would capture the current function value
+	// and keep removing tmpName even after it was renamed to its final path.
+	defer func() { cleanup() }()
 
 	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = tmp.Close()
@@ -487,7 +490,9 @@ func extractTarGz(archive []byte, destDir string) error {
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return fmt.Errorf("mkdir %q: %w", target, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		// TypeRegA is not listed: archive/tar has normalized it to TypeReg
+		// on read since Go 1.11, and the constant is deprecated.
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return fmt.Errorf("mkdir parent of %q: %w", target, err)
 			}

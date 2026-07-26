@@ -37,10 +37,11 @@ type MemoryHandlers struct {
 }
 
 // NewMemoryHandlers creates MemoryHandlers. The userIDFromCtx closure is
-// typically: func(ctx context.Context) string {
-//   if u := server.UserFromContext(ctx); u != nil { return u.ID }
-//   return ""
-// }
+//
+//	typically: func(ctx context.Context) string {
+//	  if u := server.UserFromContext(ctx); u != nil { return u.ID }
+//	  return ""
+//	}
 //
 // extractorSvc may be nil — in which case the /api/memory/extract endpoint
 // returns 503 ("extraction not configured").
@@ -266,18 +267,6 @@ func (h *MemoryHandlers) HandleStats(w http.ResponseWriter, r *http.Request) {
 // SessionID is required and must belong to the authenticated user.
 type runExtractionRequest struct {
 	SessionID string `json:"session_id"`
-}
-
-// runExtractionResponse mirrors extractor.ExtractResult but with snake_case
-// JSON tags for the wire.
-type runExtractionResponse struct {
-	SessionID       string   `json:"session_id"`
-	MessagesTotal   int      `json:"messages_total"`
-	MessagesKept    int      `json:"messages_kept"`
-	MessagesNew     int      `json:"messages_new"`
-	ChunksProcessed int      `json:"chunks_processed"`
-	MemoriesCreated int      `json:"memories_created"`
-	Errors          []string `json:"errors,omitempty"`
 }
 
 // HandleExtract kicks off LLM extraction on one session. Wired at
