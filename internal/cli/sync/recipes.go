@@ -80,8 +80,8 @@ type RecipeSyncReport struct {
 
 // RecipeSyncAction is one recipe's result.
 type RecipeSyncAction struct {
-	Slug       string `json:"slug"`
-	Plugin     string `json:"plugin"`
+	Slug        string `json:"slug"`
+	Plugin      string `json:"plugin"`
 	Marketplace string `json:"marketplace"`
 }
 

@@ -531,5 +531,5 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 		downloadRepo = "ATECHPCS/arc-relay"
 	}
 	githubURL := fmt.Sprintf("https://github.com/%s/releases/latest/download/%s", downloadRepo, binary) // #nosec G710 - github.com host is fixed; downloadRepo is operator-controlled env (not user input), binary is allowlisted above
-	http.Redirect(w, r, githubURL, http.StatusFound)                                                      // #nosec G710 - same justification
+	http.Redirect(w, r, githubURL, http.StatusFound)                                                    // #nosec G710 - same justification
 }

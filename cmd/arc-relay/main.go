@@ -17,9 +17,9 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/docker"
 	"github.com/comma-compliance/arc-relay/internal/llm"
+	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
 	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/memory/extractor"
-	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
@@ -29,8 +29,8 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/skills/checker"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
-	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 	"github.com/comma-compliance/arc-relay/migrations"
+	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 )
 
 func main() {

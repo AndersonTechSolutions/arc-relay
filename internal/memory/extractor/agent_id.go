@@ -13,11 +13,11 @@ const agentIDPrefix = "transcripts-"
 
 // Derive normalizes a project directory to a stable mem0 agent_id.
 //
-//   /Users/ian/code/arc-relay        -> transcripts-arc-relay
-//   /Users/ian/.claude               -> transcripts-claude
-//   /home/foo/My Stuff               -> transcripts-my-stuff
-//   /Users/ian/code/arc-relay/       -> transcripts-arc-relay
-//   ""                                -> transcripts-unknown
+//	/Users/ian/code/arc-relay        -> transcripts-arc-relay
+//	/Users/ian/.claude               -> transcripts-claude
+//	/home/foo/My Stuff               -> transcripts-my-stuff
+//	/Users/ian/code/arc-relay/       -> transcripts-arc-relay
+//	""                                -> transcripts-unknown
 //
 // Basename collisions across different machines/clones are disambiguated
 // per-memory via metadata.project_dir at search time, not here.

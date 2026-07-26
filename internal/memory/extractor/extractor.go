@@ -36,15 +36,15 @@ type UsernameResolver func(userID string) (string, bool)
 // Service orchestrates the extraction pipeline for a single transcript memory
 // store. One instance per arc-relay process.
 type Service struct {
-	sessions     *store.SessionMemoryStore
-	messages     *store.MessageStore
-	extractions  *store.ExtractionStore
-	backend      BackendResolver
-	resolveUser  UsernameResolver
-	classifier   Classifier // optional; nil disables category metadata
-	chunkTarget  int
+	sessions       *store.SessionMemoryStore
+	messages       *store.MessageStore
+	extractions    *store.ExtractionStore
+	backend        BackendResolver
+	resolveUser    UsernameResolver
+	classifier     Classifier // optional; nil disables category metadata
+	chunkTarget    int
 	requestTimeout time.Duration
-	locks        sync.Map // session_id -> *sync.Mutex
+	locks          sync.Map // session_id -> *sync.Mutex
 }
 
 // SetClassifier wires an optional classifier into the service. When set, every
@@ -70,15 +70,15 @@ func NewService(sessions *store.SessionMemoryStore, messages *store.MessageStore
 		resolveUser = func(id string) (string, bool) { return "", false }
 	}
 	return &Service{
-		sessions:       sessions,
-		messages:       messages,
-		extractions:    extractions,
-		backend:        backend,
-		resolveUser:    resolveUser,
+		sessions:    sessions,
+		messages:    messages,
+		extractions: extractions,
+		backend:     backend,
+		resolveUser: resolveUser,
 		// 3000 chars (≈750-1000 tokens) keeps OpenAI's text-embedding-3-*
 		// model below its 8192-token input cap with comfortable headroom for
 		// mem0's internal concatenation of dedup-candidate metadata.
-		chunkTarget:    3000,
+		chunkTarget: 3000,
 		// 180s per add_memory call: production observation showed ~30% of
 		// chunks miss the previous 60s budget under load, while mem0's
 		// container is far from saturated — the wait is OpenAI latency.
@@ -492,7 +492,9 @@ func parseMemoryHits(result json.RawMessage) []MemoryHit {
 
 	// mem0 wraps results either as {"results":[...]} or [...].
 	var arr []rawHit
-	var withResults struct{ Results []rawHit `json:"results"` }
+	var withResults struct {
+		Results []rawHit `json:"results"`
+	}
 	if err := json.Unmarshal([]byte(text), &withResults); err == nil && len(withResults.Results) > 0 {
 		arr = withResults.Results
 	} else if err := json.Unmarshal([]byte(text), &arr); err != nil {
@@ -530,9 +532,11 @@ func parseMemoryHits(result json.RawMessage) []MemoryHit {
 // content shape is `{"content":[{"type":"text","text":"..."}]}`; the inner
 // text is whatever the server wraps in. mem0's code-memory wrapper returns
 // JSON that may be one of:
-//   {"results":[{"id":"...","memory":"..."},...]}
-//   [{"id":"...","memory":"..."},...]
-//   {"id":"...","memory":"..."}            // single result
+//
+//	{"results":[{"id":"...","memory":"..."},...]}
+//	[{"id":"...","memory":"..."},...]
+//	{"id":"...","memory":"..."}            // single result
+//
 // Anything else returns an empty slice — we log the count, not the error,
 // because mem0 sometimes legitimately decides "no memories" for a chunk.
 func parseMemoryIDs(result json.RawMessage) []string {

@@ -168,8 +168,8 @@ func TestSkillCreateVersion_RequiresFields(t *testing.T) {
 	}
 
 	cases := []*store.SkillVersion{
-		{SkillID: sk.ID, ArchivePath: "p", ArchiveSize: 1, ArchiveSHA256: "h"}, // no version
-		{SkillID: sk.ID, Version: "1.0.0", ArchiveSize: 1, ArchiveSHA256: "h"}, // no archive path
+		{SkillID: sk.ID, ArchivePath: "p", ArchiveSize: 1, ArchiveSHA256: "h"},   // no version
+		{SkillID: sk.ID, Version: "1.0.0", ArchiveSize: 1, ArchiveSHA256: "h"},   // no archive path
 		{SkillID: sk.ID, Version: "1.0.0", ArchivePath: "p", ArchiveSHA256: "h"}, // size = 0
 		{SkillID: sk.ID, Version: "1.0.0", ArchivePath: "p", ArchiveSize: 1},     // no sha
 	}

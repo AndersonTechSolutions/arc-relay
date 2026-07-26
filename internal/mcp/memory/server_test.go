@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	memsvc "github.com/comma-compliance/arc-relay/internal/memory"
 	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
+	memsvc "github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 )

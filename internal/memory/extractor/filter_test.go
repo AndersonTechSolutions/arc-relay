@@ -53,11 +53,11 @@ func TestKeepMessage(t *testing.T) {
 
 func TestFilter_StatsAccounting(t *testing.T) {
 	msgs := []*store.Message{
-		{Role: "tool", Content: "anything"},                  // tier 1
-		{Role: "system", Content: "anything"},                 // tier 1
-		{Role: "user", Content: "ok"},                         // tier 2
-		{Role: "assistant", Content: `{"action":"run","cmd":"git status"}`}, // tier 3
-		{Role: "user", Content: "this is a substantive request to do work"}, // kept
+		{Role: "tool", Content: "anything"},                                               // tier 1
+		{Role: "system", Content: "anything"},                                             // tier 1
+		{Role: "user", Content: "ok"},                                                     // tier 2
+		{Role: "assistant", Content: `{"action":"run","cmd":"git status"}`},               // tier 3
+		{Role: "user", Content: "this is a substantive request to do work"},               // kept
 		{Role: "assistant", Content: "and this is a substantive response with reasoning"}, // kept
 	}
 	kept, stats := Filter(msgs)

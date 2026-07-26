@@ -117,9 +117,9 @@ func TestRecipesHandlers_CreateRejectsInvalidPayload(t *testing.T) {
 	rig.userToInject = rig.admin
 
 	cases := []string{
-		`{"slug":"x","recipe_type":"claude_plugin","recipe_data":{}}`,                                                    // missing fields
-		`{"slug":"x","recipe_type":"shell_script","recipe_data":{"script":"echo"}}`,                                      // unsupported type
-		`{"slug":"BAD","recipe_type":"claude_plugin","recipe_data":{"marketplace_source":"a/b","plugin":"x"}}`,            // bad slug
+		`{"slug":"x","recipe_type":"claude_plugin","recipe_data":{}}`,                                                      // missing fields
+		`{"slug":"x","recipe_type":"shell_script","recipe_data":{"script":"echo"}}`,                                        // unsupported type
+		`{"slug":"BAD","recipe_type":"claude_plugin","recipe_data":{"marketplace_source":"a/b","plugin":"x"}}`,             // bad slug
 		`{"slug":"good-slug","recipe_type":"claude_plugin","recipe_data":{"marketplace_source":"a/b","plugin":"with sp"}}`, // bad plugin
 	}
 	for _, body := range cases {
