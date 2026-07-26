@@ -83,6 +83,9 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
+          # Matches the Makefile's lint target. Without the tag golangci-lint
+          # analyses a different build than the compiler produces.
+          args: --build-tags sqlite_fts5
         env:
           CGO_ENABLED: "1"
 
