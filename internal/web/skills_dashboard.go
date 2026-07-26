@@ -106,6 +106,8 @@ func (h *Handlers) HandleSkillNew(w http.ResponseWriter, r *http.Request) {
 	// limit + a small headers slack.
 	r.Body = http.MaxBytesReader(w, r.Body, skills.MaxArchiveSize+1<<16)
 
+	// #nosec G120 -- http.MaxBytesReader caps r.Body on the line above, before
+	// the parser allocates.
 	if err := r.ParseMultipartForm(skillUploadFormLimit); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
@@ -245,6 +247,11 @@ func (h *Handlers) HandleSkillRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "yank failed", http.StatusInternalServerError)
 			return
 		}
+		// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+		// '/', and control only reaches here after an exact `WHERE slug = ?` match
+		// returned a row. Stored slugs are validated by ValidateSlug at the store
+		// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+		// same-origin relative path.
 		http.Redirect(w, r, "/skills/"+slug, http.StatusFound)
 	case "unyank":
 		if err := h.skillStore.UnyankSkill(skill.ID); err != nil {
@@ -252,6 +259,11 @@ func (h *Handlers) HandleSkillRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unyank failed", http.StatusInternalServerError)
 			return
 		}
+		// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+		// '/', and control only reaches here after an exact `WHERE slug = ?` match
+		// returned a row. Stored slugs are validated by ValidateSlug at the store
+		// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+		// same-origin relative path.
 		http.Redirect(w, r, "/skills/"+slug, http.StatusFound)
 	case "delete":
 		if err := h.skillStore.DeleteSkill(skill.ID); err != nil {
@@ -273,6 +285,11 @@ func (h *Handlers) HandleSkillRoutes(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "clear upstream failed", http.StatusInternalServerError)
 				return
 			}
+			// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+			// '/', and control only reaches here after an exact `WHERE slug = ?` match
+			// returned a row. Stored slugs are validated by ValidateSlug at the store
+			// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+			// same-origin relative path.
 			http.Redirect(w, r, "/skills/"+slug, http.StatusFound)
 			return
 		}
@@ -308,6 +325,11 @@ func (h *Handlers) HandleSkillRoutes(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+		// '/', and control only reaches here after an exact `WHERE slug = ?` match
+		// returned a row. Stored slugs are validated by ValidateSlug at the store
+		// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+		// same-origin relative path.
 		http.Redirect(w, r, "/skills/"+slug, http.StatusFound)
 	default:
 		http.NotFound(w, r)
@@ -386,6 +408,11 @@ func (h *Handlers) handleMetaForm(w http.ResponseWriter, r *http.Request, skill 
 		h.renderSkillDetailWithMetaError(w, r, user, skill, "Saving metadata failed: "+err.Error(), displayName, description, visibility)
 		return
 	}
+	// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+	// '/', and control only reaches here after an exact `WHERE slug = ?` match
+	// returned a row. Stored slugs are validated by ValidateSlug at the store
+	// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+	// same-origin relative path.
 	http.Redirect(w, r, "/skills/"+skill.Slug, http.StatusFound)
 }
 
@@ -466,6 +493,11 @@ func (h *Handlers) handleUpstreamForm(w http.ResponseWriter, r *http.Request, sk
 		h.renderSkillDetailWithUpstreamError(w, r, user, skill, "Saving upstream tracking failed: "+err.Error(), gitURL, subpath, ref)
 		return
 	}
+	// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+	// '/', and control only reaches here after an exact `WHERE slug = ?` match
+	// returned a row. Stored slugs are validated by ValidateSlug at the store
+	// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+	// same-origin relative path.
 	http.Redirect(w, r, "/skills/"+skill.Slug, http.StatusFound)
 }
 

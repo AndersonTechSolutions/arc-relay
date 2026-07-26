@@ -2074,6 +2074,8 @@ func installLaunchd(home string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	// #nosec G204 -- argv is a fixed literal: launchctl load -w <plist path we
+	// just wrote>. No shell, no caller input.
 	cmd := exec.Command("launchctl", "load", "-w", dst)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -2110,6 +2112,8 @@ func installSystemd(home string) {
 		{"systemctl", "--user", "daemon-reload"},
 		{"systemctl", "--user", "enable", "--now", "arc-sync-memory.service"},
 	} {
+		// #nosec G204 -- argv comes from a literal [][]string of systemctl
+		// invocations declared immediately above. No shell, no caller input.
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

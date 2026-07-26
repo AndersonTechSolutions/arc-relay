@@ -57,6 +57,9 @@ func (e *ExecClaudeRunner) Run(ctx context.Context, args ...string) ([]byte, err
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	// #nosec G204 -- bin is the literal "claude" unless overridden in Go code;
+	// exec.Command does not use a shell, so recipe-supplied values become
+	// single argv elements and cannot inject commands.
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = nil
 	var stdout, stderr bytes.Buffer

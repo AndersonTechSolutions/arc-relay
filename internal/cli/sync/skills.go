@@ -481,6 +481,9 @@ func PackageSkill(dir string) (archive []byte, slug string, err error) {
 			return err
 		}
 		if fi.Mode().IsRegular() {
+			// #nosec G122 -- packaging the operator's own local skill directory for
+			// upload; a TOCTOU here would need a local attacker racing the user's own
+			// filesystem, which is not a boundary this tool defends.
 			f, err := os.Open(path)
 			if err != nil {
 				return err
@@ -563,6 +566,9 @@ func mode(headerMode int64, fallback os.FileMode) os.FileMode {
 	if headerMode == 0 {
 		return fallback
 	}
+	// #nosec G115 -- the conversion is immediately masked with & os.ModePerm,
+	// so any int64 the tar header carries — negative or oversized — yields a
+	// value in [0,0777]. setuid/setgid/sticky cannot survive the mask.
 	m := os.FileMode(headerMode) & os.ModePerm
 	if m == 0 {
 		return fallback
