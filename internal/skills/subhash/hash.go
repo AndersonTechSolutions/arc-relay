@@ -64,13 +64,13 @@ func walk(absRoot, relDir string, h io.Writer, ignored []string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(h, "%s\n%o\n%s\n", relPath, mode, target)
+			_, _ = fmt.Fprintf(h, "%s\n%o\n%s\n", relPath, mode, target)
 			continue
 		}
 		if info.Mode()&0o111 != 0 {
 			mode = 0o100755
 		}
-		fmt.Fprintf(h, "%s\n%o\n", relPath, mode)
+		_, _ = fmt.Fprintf(h, "%s\n%o\n", relPath, mode)
 		f, err := os.Open(filepath.Join(absRoot, relPath))
 		if err != nil {
 			return err

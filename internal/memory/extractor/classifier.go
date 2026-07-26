@@ -135,7 +135,7 @@ func (c *OpenAIClassifier) Classify(ctx context.Context, chunkText string) (stri
 	if err != nil {
 		return "", fmt.Errorf("classifier: send: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

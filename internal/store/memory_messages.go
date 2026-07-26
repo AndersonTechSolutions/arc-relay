@@ -81,7 +81,7 @@ func (s *MessageStore) BulkInsert(msgs []*Message) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, m := range msgs {
 		res, err := stmt.Exec(
@@ -139,7 +139,7 @@ LIMIT ?`, strings.Join(where, " AND "))
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanHits(rows)
 }
 
@@ -181,7 +181,7 @@ LIMIT 5000`, strings.Join(where, " AND "))
 	if err != nil {
 		return nil, fmt.Errorf("regex base query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var hits []*SearchHit
 	for rows.Next() {
@@ -212,7 +212,7 @@ ORDER BY id ASC`, sessionID, fromEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*Message
 	for rows.Next() {
 		var m Message

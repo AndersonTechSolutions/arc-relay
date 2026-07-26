@@ -102,7 +102,7 @@ func TestAPIKeyForm_AdminGrantsCapabilities(t *testing.T) {
 		"capability": {"skills:write", "recipes:write"},
 	}
 	resp := r.postNewKey(t, form)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302", resp.StatusCode)
 	}
@@ -134,7 +134,7 @@ func TestAPIKeyForm_NonAdminCapabilitiesIgnored(t *testing.T) {
 		"capability": {"skills:write"},
 	}
 	resp := r.postNewKey(t, form)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body should still create a (capability-free) key", resp.StatusCode)
 	}
@@ -158,7 +158,7 @@ func TestAPIKeyForm_AdminNoCheckboxesNoCapabilities(t *testing.T) {
 	r := newAPIKeyRig(t, "admin")
 	form := url.Values{"key_name": {"daily-driver"}}
 	resp := r.postNewKey(t, form)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302", resp.StatusCode)
 	}
@@ -181,7 +181,7 @@ func TestAPIKeyForm_AdminUnknownCapabilityDropped(t *testing.T) {
 		"capability": {"skills:write", "skills:nuke"},
 	}
 	resp := r.postNewKey(t, form)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302", resp.StatusCode)
 	}

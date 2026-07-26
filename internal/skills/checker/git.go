@@ -196,7 +196,7 @@ func CheckoutSubpath(ctx context.Context, cacheDir, sha, subpath, destDir string
 	}
 	// tar inherited a dup of pr; the parent doesn't need it any more. Defer
 	// so a panic between here and the end still releases the fd.
-	defer pr.Close()
+	defer func() { _ = pr.Close() }()
 
 	if err := archiveCmd.Start(); err != nil {
 		_ = pw.Close()

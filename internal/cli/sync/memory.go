@@ -131,7 +131,7 @@ func (w *MemoryWatcher) Run() error {
 		fmt.Fprintln(os.Stderr, "memory watch: fsnotify unavailable, falling back to 5s poll:", err)
 		return w.pollLoop(st)
 	}
-	defer notify.Close()
+	defer func() { _ = notify.Close() }()
 
 	if err := w.addRecursive(notify, w.RootDir); err != nil {
 		return fmt.Errorf("watch root: %w", err)
@@ -368,7 +368,7 @@ func (w *MemoryWatcher) PostExtract(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		buf, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("extract %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
@@ -411,7 +411,7 @@ func (w *MemoryWatcher) postIngest(body []byte) (*ingestResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		buf, _ := io.ReadAll(resp.Body)
 		return nil, &ingestHTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(buf))}
@@ -430,7 +430,7 @@ func readTail(path string, offset int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return nil, err

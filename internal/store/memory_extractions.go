@@ -67,7 +67,7 @@ ORDER BY chunk_index ASC`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("list extractions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*MemoryExtraction
 	for rows.Next() {
 		e := &MemoryExtraction{}

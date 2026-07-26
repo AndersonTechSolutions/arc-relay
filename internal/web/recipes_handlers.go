@@ -230,7 +230,7 @@ type createBody struct {
 
 func (h *RecipesHandlers) create(w http.ResponseWriter, r *http.Request, uploaderID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, recipesBodyLimit)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -280,7 +280,7 @@ type updateBody struct {
 
 func (h *RecipesHandlers) update(w http.ResponseWriter, r *http.Request, recipe *store.SetupRecipe) {
 	r.Body = http.MaxBytesReader(w, r.Body, recipesBodyLimit)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -375,7 +375,7 @@ func (h *RecipesHandlers) listAssignments(w http.ResponseWriter, recipe *store.S
 // Idempotent: re-assigning replaces the prior grant.
 func (h *RecipesHandlers) assignRecipe(w http.ResponseWriter, r *http.Request, recipe *store.SetupRecipe, adminID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "body unreadable")

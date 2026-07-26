@@ -473,7 +473,7 @@ func editSkill(c editClient, slug string, in *relay.PatchSkillInput, stdout, std
 		printSkillEditError(stderr, slug, err)
 		return err
 	}
-	fmt.Fprintf(stdout, "Updated %s: visibility=%s display=%q\n",
+	_, _ = fmt.Fprintf(stdout, "Updated %s: visibility=%s display=%q\n",
 		updated.Slug, updated.Visibility, updated.DisplayName)
 	return nil
 }
@@ -485,20 +485,20 @@ func printSkillEditError(stderr io.Writer, slug string, err error) {
 	if errors.As(err, &httpErr) {
 		switch httpErr.Status {
 		case http.StatusBadRequest:
-			fmt.Fprintf(stderr, "skill %s: bad request — visibility must be public/restricted, display_name non-empty\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: bad request — visibility must be public/restricted, display_name non-empty\n", slug)
 			return
 		case http.StatusForbidden:
-			fmt.Fprintf(stderr, "skill %s: forbidden — admin role or skills:write API key required\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: forbidden — admin role or skills:write API key required\n", slug)
 			return
 		case http.StatusNotFound:
-			fmt.Fprintf(stderr, "skill %s: not found on relay\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: not found on relay\n", slug)
 			return
 		case http.StatusUnsupportedMediaType:
-			fmt.Fprintf(stderr, "skill %s: relay rejected request body (likely a client/server mismatch)\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: relay rejected request body (likely a client/server mismatch)\n", slug)
 			return
 		}
 	}
-	fmt.Fprintf(stderr, "skill %s: %s\n", slug, err)
+	_, _ = fmt.Fprintf(stderr, "skill %s: %s\n", slug, err)
 }
 
 // runSkillSetUpstream implements `arc-sync skill set-upstream <slug>
@@ -543,7 +543,7 @@ func setUpstream(c upstreamClient, slug, gitURL, subpath, ref string, stdout, st
 	if gotPath == "" {
 		gotPath = "(repo root)"
 	}
-	fmt.Fprintf(stdout, "Set upstream for %s: %s @ %s (path=%s)\n", slug, gotURL, gotRef, gotPath)
+	_, _ = fmt.Fprintf(stdout, "Set upstream for %s: %s @ %s (path=%s)\n", slug, gotURL, gotRef, gotPath)
 	return nil
 }
 
@@ -567,7 +567,7 @@ func clearUpstream(c upstreamClient, slug string, stdout, stderr io.Writer) erro
 		printSetUpstreamError(stderr, slug, err)
 		return err
 	}
-	fmt.Fprintf(stdout, "Cleared upstream tracking for %s\n", slug)
+	_, _ = fmt.Fprintf(stdout, "Cleared upstream tracking for %s\n", slug)
 	return nil
 }
 
@@ -579,20 +579,20 @@ func printSetUpstreamError(stderr io.Writer, slug string, err error) {
 	if errors.As(err, &httpErr) {
 		switch httpErr.Status {
 		case http.StatusBadRequest:
-			fmt.Fprintf(stderr, "skill %s: bad request (check --git-url and --ref values)\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: bad request (check --git-url and --ref values)\n", slug)
 			return
 		case http.StatusForbidden:
-			fmt.Fprintf(stderr, "skill %s: forbidden — admin role or skills:write API key required\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: forbidden — admin role or skills:write API key required\n", slug)
 			return
 		case http.StatusNotFound:
-			fmt.Fprintf(stderr, "skill %s: not found on relay\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: not found on relay\n", slug)
 			return
 		case http.StatusUnsupportedMediaType:
-			fmt.Fprintf(stderr, "skill %s: relay rejected request body (likely a client/server mismatch)\n", slug)
+			_, _ = fmt.Fprintf(stderr, "skill %s: relay rejected request body (likely a client/server mismatch)\n", slug)
 			return
 		}
 	}
-	fmt.Fprintf(stderr, "skill %s: %s\n", slug, err)
+	_, _ = fmt.Fprintf(stderr, "skill %s: %s\n", slug, err)
 }
 
 // driftClient narrows the relay.Client surface area used by the check-updates
@@ -637,12 +637,12 @@ func checkUpdates(c driftClient, slug string, stdout, stderr io.Writer) error {
 			return err
 		}
 		if drift == nil {
-			fmt.Fprintln(stdout, "up-to-date")
+			_, _ = fmt.Fprintln(stdout, "up-to-date")
 			return nil
 		}
-		fmt.Fprintf(stdout, "outdated · %s: %s\n", drift.Severity, drift.Summary)
+		_, _ = fmt.Fprintf(stdout, "outdated · %s: %s\n", drift.Severity, drift.Summary)
 		if drift.RecommendedAction != "" {
-			fmt.Fprintln(stdout, drift.RecommendedAction)
+			_, _ = fmt.Fprintln(stdout, drift.RecommendedAction)
 		}
 		return nil
 	}
@@ -652,7 +652,7 @@ func checkUpdates(c driftClient, slug string, stdout, stderr io.Writer) error {
 	// and surface other errors as warnings without aborting the loop.
 	skills, err := c.ListSkills()
 	if err != nil {
-		fmt.Fprintln(stderr, "skill check-updates:", err)
+		_, _ = fmt.Fprintln(stderr, "skill check-updates:", err)
 		return err
 	}
 	for _, s := range skills {
@@ -663,14 +663,14 @@ func checkUpdates(c driftClient, slug string, stdout, stderr io.Writer) error {
 				// No upstream tracked for this skill — expected, skip.
 				continue
 			}
-			fmt.Fprintf(stderr, "%s: %s\n", s.Slug, err)
+			_, _ = fmt.Fprintf(stderr, "%s: %s\n", s.Slug, err)
 			continue
 		}
 		if drift == nil {
-			fmt.Fprintf(stdout, "%s: up-to-date\n", s.Slug)
+			_, _ = fmt.Fprintf(stdout, "%s: up-to-date\n", s.Slug)
 			continue
 		}
-		fmt.Fprintf(stdout, "%s: outdated · %s\n", s.Slug, drift.Severity)
+		_, _ = fmt.Fprintf(stdout, "%s: outdated · %s\n", s.Slug, drift.Severity)
 	}
 	return nil
 }
@@ -683,17 +683,17 @@ func printCheckDriftError(stderr io.Writer, err error) {
 	if errors.As(err, &httpErr) {
 		switch httpErr.Status {
 		case http.StatusNotFound:
-			fmt.Fprintln(stderr, "skill not found")
+			_, _ = fmt.Fprintln(stderr, "skill not found")
 			return
 		case http.StatusConflict:
-			fmt.Fprintln(stderr, "no upstream tracking configured")
+			_, _ = fmt.Fprintln(stderr, "no upstream tracking configured")
 			return
 		case http.StatusBadGateway:
-			fmt.Fprintln(stderr, "upstream fetch failed")
+			_, _ = fmt.Fprintln(stderr, "upstream fetch failed")
 			return
 		}
 	}
-	fmt.Fprintln(stderr, "skill check-updates:", err)
+	_, _ = fmt.Fprintln(stderr, "skill check-updates:", err)
 }
 
 // emitJSON marshals v as pretty JSON and writes it to stdout. Used by the

@@ -124,7 +124,7 @@ func Detect(
 	if err != nil {
 		return nil, fmt.Errorf("Detect: mkdtemp: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	if err := CheckoutSubpath(ctx, cacheDir, newSHA, upstream.GitSubpath, tmpDir); err != nil {
 		return nil, fmt.Errorf("Detect: checkout %s:%s: %w",
 			newSHA, upstream.GitSubpath, err)
