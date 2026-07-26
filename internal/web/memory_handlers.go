@@ -326,6 +326,10 @@ func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
 	// goes away) doesn't cancel a multi-minute extraction. The per-session
 	// mutex inside extractor.Extract serializes if a duplicate request
 	// arrives.
+	// #nosec G118 -- deliberate: the handler returns 202 immediately, so the
+	// request context is cancelled the moment the response is written and
+	// would kill a multi-minute extraction. Bounded instead by an explicit
+	// 30-minute timeout.
 	go func(sid, uid string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()

@@ -177,6 +177,11 @@ func (h *Handlers) HandleRecipeRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "yank failed", http.StatusInternalServerError)
 			return
 		}
+		// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+		// '/', and control only reaches here after an exact `WHERE slug = ?` match
+		// returned a row. Stored slugs are validated by ValidateSlug at the store
+		// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+		// same-origin relative path.
 		http.Redirect(w, r, "/recipes/"+slug, http.StatusFound)
 	case "unyank":
 		if err := h.recipeStore.UnyankRecipe(recipe.ID); err != nil {
@@ -184,6 +189,11 @@ func (h *Handlers) HandleRecipeRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unyank failed", http.StatusInternalServerError)
 			return
 		}
+		// #nosec G710 -- slug is parts[0] of the URL path so it cannot contain
+		// '/', and control only reaches here after an exact `WHERE slug = ?` match
+		// returned a row. Stored slugs are validated by ValidateSlug at the store
+		// layer (^[a-z0-9][a-z0-9-]*[a-z0-9]$), so the target is always a
+		// same-origin relative path.
 		http.Redirect(w, r, "/recipes/"+slug, http.StatusFound)
 	case "delete":
 		if err := h.recipeStore.DeleteRecipe(recipe.ID); err != nil {

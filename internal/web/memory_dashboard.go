@@ -96,6 +96,8 @@ func formatInt64(n int64) string {
 		if i > 0 && (len(s)-i)%3 == 0 {
 			out = append(out, ',')
 		}
+		// #nosec G115 -- s is strconv.FormatInt output, so every rune is ASCII
+		// [-0-9] and the byte conversion cannot truncate.
 		out = append(out, byte(c))
 	}
 	if neg {
