@@ -18,7 +18,7 @@ func hashSubpathAt(t *testing.T, cacheDir, sha, subpath string) string {
 	if err != nil {
 		t.Fatalf("mkdtemp: %v", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	if err := CheckoutSubpath(context.Background(), cacheDir, sha, subpath, tmp); err != nil {
 		t.Fatalf("CheckoutSubpath: %v", err)
 	}

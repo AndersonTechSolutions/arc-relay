@@ -241,7 +241,7 @@ func (c *MemorySearchClient) get(endpoint string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("memory %s %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(body)))

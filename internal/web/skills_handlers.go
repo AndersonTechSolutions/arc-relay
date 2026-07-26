@@ -161,7 +161,8 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 	if skill == nil {
 		// For uploads (POST) we let the slug be created on the fly — a 404 here
 		// would block the natural "publish a brand new skill" flow.
-		if !(r.Method == http.MethodPost && len(parts) >= 3 && parts[1] == "versions") {
+		isVersionUpload := r.Method == http.MethodPost && len(parts) >= 3 && parts[1] == "versions"
+		if !isVersionUpload {
 			writeJSONError(w, http.StatusNotFound, "skill not found")
 			return
 		}
@@ -409,7 +410,7 @@ type upstreamHeaderPayload struct {
 
 func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, slug, version, uploaderID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, skills.MaxArchiveSize)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -535,7 +536,7 @@ func (h *SkillsHandlers) patchSkill(w http.ResponseWriter, r *http.Request, skil
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "body unreadable")
@@ -680,7 +681,7 @@ func (h *SkillsHandlers) listAssignments(w http.ResponseWriter, skill *store.Ski
 // version is optional. Idempotent: re-assigning replaces the prior pin.
 func (h *SkillsHandlers) assignSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill, adminID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "body unreadable")
@@ -869,7 +870,7 @@ func (h *SkillsHandlers) upsertUpstream(w http.ResponseWriter, r *http.Request, 
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "body unreadable")

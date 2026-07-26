@@ -89,7 +89,7 @@ LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*MemorySession
 	for rows.Next() {
 		var m MemorySession
@@ -134,7 +134,7 @@ LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("group by project: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*ProjectGroup
 	for rows.Next() {
 		g := &ProjectGroup{}
@@ -180,7 +180,7 @@ LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list sessions paged: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*MemorySession
 	for rows.Next() {
 		var m MemorySession
@@ -255,7 +255,7 @@ LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list stale for extraction: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var id string

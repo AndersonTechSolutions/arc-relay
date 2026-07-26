@@ -99,7 +99,7 @@ func TestOpen_SetsFileMode0600(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	info, err := os.Stat(dbPath)
 	if err != nil {
@@ -117,5 +117,5 @@ func TestOpen_MemoryPathSkipsChmod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open :memory:: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 }

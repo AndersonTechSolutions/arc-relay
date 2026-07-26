@@ -66,7 +66,7 @@ func (h *MemoryHandlers) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, memoryBodyLimit)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		// MaxBytesReader returns *http.MaxBytesError when the cap is hit.
@@ -298,7 +298,7 @@ func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "body unreadable", http.StatusBadRequest)

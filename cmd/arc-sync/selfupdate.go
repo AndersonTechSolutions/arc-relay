@@ -131,7 +131,7 @@ Flags:
 		cleanupTmp()
 		failSelfUpdate(jsonOut, "GET: "+err.Error())
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		cleanupTmp()
 		failSelfUpdate(jsonOut, fmt.Sprintf("relay returned HTTP %d for %s", resp.StatusCode, url))

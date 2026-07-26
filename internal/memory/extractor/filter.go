@@ -115,8 +115,8 @@ func Filter(msgs []*store.Message) ([]*store.Message, FilterStats) {
 	stats := FilterStats{Total: len(msgs)}
 	out := make([]*store.Message, 0, len(msgs))
 	for _, m := range msgs {
-		switch {
-		case m.Role == "tool" || m.Role == "system":
+		switch m.Role {
+		case "tool", "system":
 			stats.ToolCount++
 			continue
 		}
