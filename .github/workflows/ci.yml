@@ -20,10 +20,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
       - name: Build server
-        run: CGO_ENABLED=1 go build ./cmd/arc-relay
+        run: CGO_ENABLED=1 go build -tags sqlite_fts5 ./cmd/arc-relay
 
       - name: Test server packages
-        run: CGO_ENABLED=1 go test -race -count=1 ./internal/catalog/... ./internal/config/... ./internal/docker/... ./internal/mcp/... ./internal/middleware/... ./internal/oauth/... ./internal/proxy/... ./internal/server/... ./internal/store/... ./internal/testutil/... ./internal/web/...
+        run: CGO_ENABLED=1 go test -tags sqlite_fts5 -race -count=1 ./internal/catalog/... ./internal/config/... ./internal/docker/... ./internal/mcp/... ./internal/middleware/... ./internal/oauth/... ./internal/proxy/... ./internal/server/... ./internal/store/... ./internal/testutil/... ./internal/web/...
 
   build-cli:
     strategy:
@@ -60,13 +60,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
       - name: Vet
-        run: go vet ./...
+        run: go vet -tags sqlite_fts5 ./...
 
       - name: Install staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
       - name: Staticcheck
-        run: staticcheck ./...
+        run: staticcheck -tags sqlite_fts5 ./...
 
       - name: Gofmt check
         run: |
@@ -102,10 +102,10 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run gosec
-        run: CGO_ENABLED=1 gosec -exclude=G104,G107,G117,G301,G304,G306,G704,G706 ./...
+        run: CGO_ENABLED=1 gosec -tags=sqlite_fts5 -exclude=G104,G107,G117,G301,G304,G306,G704,G706 ./...
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck (advisory)
-        run: CGO_ENABLED=1 govulncheck ./... || echo "::warning::govulncheck found vulnerabilities (see above)"
+        run: CGO_ENABLED=1 govulncheck -tags sqlite_fts5 ./... || echo "::warning::govulncheck found vulnerabilities (see above)"

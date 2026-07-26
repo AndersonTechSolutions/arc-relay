@@ -58,6 +58,11 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Derive the image from the repo that is actually building, lowercased
+          # because GHCR rejects uppercase names. Hardcoding an owner here is how
+          # this job came to push at the upstream org after the fork moved, which
+          # failed every release with "permission_denied".
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
           # Only tag as latest for stable releases (no hyphens like -rc1, -beta)
           if [[ "$VERSION" == *-* ]]; then
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
@@ -72,8 +77,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/comma-compliance/arc-relay:${{ steps.version.outputs.version }}
-            ${{ steps.version.outputs.is_prerelease == 'false' && 'ghcr.io/comma-compliance/arc-relay:latest' || '' }}
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
+            ${{ steps.version.outputs.is_prerelease == 'false' && format('{0}:latest', steps.version.outputs.image) || '' }}
           labels: |
-            org.opencontainers.image.source=https://github.com/comma-compliance/arc-relay
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
