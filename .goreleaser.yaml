@@ -74,7 +74,10 @@ changelog:
 
 release:
   github:
-    owner: ATECHPCS
+    # Must match the repo's current owner. The upload endpoint answers a 307
+    # redirect for the pre-transfer owner and goreleaser does not follow it, so
+    # a stale value here fails every asset upload after the release is created.
+    owner: AndersonTechSolutions
     name: arc-relay
   draft: false
   prerelease: auto
