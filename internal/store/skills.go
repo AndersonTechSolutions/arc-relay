@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -508,6 +509,61 @@ func scanAssignments(rows *sql.Rows) ([]*SkillAssignment, error) {
 	return out, rows.Err()
 }
 
+// AllowedGitProtocols is the transport allowlist handed to git.
+//
+// The one that matters is the omission of ext: git's ext:: transport runs an
+// arbitrary command, so allowing it would turn "can set an upstream URL" into
+// code execution as the relay user. file is permitted — it only reaches local
+// git repositories, which in the relay container means other skills' caches,
+// already readable by anyone who can set an upstream — and excluding it would
+// break cloning from a local mirror for no security gain.
+var AllowedGitProtocols = []string{"http", "https", "ssh", "git", "file"}
+
+// ErrUnsupportedGitURL is returned for an upstream URL whose transport is not
+// in AllowedGitProtocols. Callers should surface it as a 400.
+var ErrUnsupportedGitURL = errors.New("unsupported git URL")
+
+// ValidateGitURL rejects upstream URLs the checker must never hand to git.
+//
+// The upstream URL is attacker-reachable: PUT /api/skills/{slug}/upstream is
+// gated on the skills:write capability, which is deliberately grantable to
+// non-admin API keys, and the checker cron later clones whatever is stored.
+// Without this an unprivileged key could aim the relay at file:// (read local
+// repos) or an internal address (the clone error text is returned to the
+// caller, so failures are observable — an SSRF oracle). ext:: is refused by
+// current git already; it is refused here too so the guarantee does not rest
+// on a default.
+//
+// scp-style "git@host:org/repo.git" is accepted: it has no scheme but is the
+// most common form for SSH remotes, and it cannot express a transport helper.
+func ValidateGitURL(raw string) error {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return fmt.Errorf("%w: empty", ErrUnsupportedGitURL)
+	}
+	// A leading "-" would be read as a flag by any git invocation that forgets
+	// its "--" separator. Cheap to refuse outright.
+	if strings.HasPrefix(s, "-") {
+		return fmt.Errorf("%w: must not begin with %q", ErrUnsupportedGitURL, "-")
+	}
+	if i := strings.Index(s, "://"); i >= 0 {
+		scheme := strings.ToLower(s[:i])
+		if !slices.Contains(AllowedGitProtocols, scheme) {
+			return fmt.Errorf("%w: transport %q is not allowed (use %s)",
+				ErrUnsupportedGitURL, scheme, strings.Join(AllowedGitProtocols, ", "))
+		}
+		return nil
+	}
+	// No "://" — a bare path or scp-style user@host:path. Both are legitimate
+	// git remotes. The one form that must not slip through is a transport
+	// helper ("ext::…", "transport::…"), which uses a double colon rather than
+	// a scheme and would otherwise read as an ordinary path.
+	if strings.Contains(s, "::") {
+		return fmt.Errorf("%w: transport helpers are not allowed", ErrUnsupportedGitURL)
+	}
+	return nil
+}
+
 // UpsertUpstream inserts or updates the upstream-tracking row for a skill.
 // On conflict (same skill_id) the upstream metadata fields are replaced; the
 // last_seen_* / drift_* fields are preserved (use the dedicated check/drift
@@ -515,6 +571,14 @@ func scanAssignments(rows *sql.Rows) ([]*SkillAssignment, error) {
 func (s *SkillStore) UpsertUpstream(u *SkillUpstream) error {
 	if u.UpstreamType == "" {
 		u.UpstreamType = "git"
+	}
+	// Enforced here rather than at each caller: three separate paths write this
+	// row (JSON API, dashboard form, X-Upstream header on upload) and the
+	// checker cron hands whatever is stored straight to `git clone`. Same
+	// placement as ValidateSlug in CreateSkill — one chokepoint a new caller
+	// cannot forget.
+	if err := ValidateGitURL(u.GitURL); err != nil {
+		return err
 	}
 	if u.GitRef == "" {
 		u.GitRef = "HEAD"

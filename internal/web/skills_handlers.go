@@ -890,6 +890,13 @@ func (h *SkillsHandlers) upsertUpstream(w http.ResponseWriter, r *http.Request, 
 		writeJSONError(w, http.StatusBadRequest, "git_url is required")
 		return
 	}
+	// This endpoint is reachable with the skills:write capability, not just by
+	// admins, and the checker cron clones whatever lands here. Reject
+	// transports git should never be handed before the row is stored.
+	if err := store.ValidateGitURL(in.GitURL); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if err := h.store.UpsertUpstream(&store.SkillUpstream{
 		SkillID:      skill.ID,

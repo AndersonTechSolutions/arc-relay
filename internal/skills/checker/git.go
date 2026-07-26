@@ -17,6 +17,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // EnsureCache makes sure cacheDir contains an up-to-date partial clone of
@@ -40,6 +42,11 @@ func EnsureCache(ctx context.Context, cacheDir, gitURL string) error {
 	}
 	if gitURL == "" {
 		return fmt.Errorf("EnsureCache: gitURL must not be empty")
+	}
+	// Re-checked here, not only at the write boundary, so a row that predates
+	// validation (or arrives by some other path) still cannot reach git.
+	if err := store.ValidateGitURL(gitURL); err != nil {
+		return fmt.Errorf("EnsureCache: %w", err)
 	}
 
 	// Pre-check ctx so a cancelled context fails fast, even if no subcommand
@@ -167,6 +174,8 @@ func CheckoutSubpath(ctx context.Context, cacheDir, sha, subpath, destDir string
 	if clean != "" {
 		archiveArgs = append(archiveArgs, "--", clean)
 	}
+	// #nosec G204 -- binary is the literal "git"; the ref is a resolved SHA
+	// and the subpath is normalised and passed after "--". No shell.
 	archiveCmd := exec.CommandContext(ctx, "git", archiveArgs...)
 	archiveCmd.Env = gitEnv()
 
@@ -174,6 +183,8 @@ func CheckoutSubpath(ctx context.Context, cacheDir, sha, subpath, destDir string
 	if stripComponents > 0 {
 		tarArgs = append(tarArgs, fmt.Sprintf("--strip-components=%d", stripComponents))
 	}
+	// #nosec G204 -- binary is the literal "tar"; every argument is internally
+	// constructed (destDir and an integer --strip-components). No shell.
 	tarCmd := exec.CommandContext(ctx, "tar", tarArgs...)
 
 	// Wire git stdout → tar stdin via an os.Pipe so both processes stream
@@ -256,6 +267,10 @@ func wipeAndClone(ctx context.Context, cacheDir, gitURL string) error {
 	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
 		return fmt.Errorf("EnsureCache: mkdir parent of %s: %w", cacheDir, err)
 	}
+	// #nosec G204 -- binary is the literal "git" and the URL is passed after
+	// "--" so it cannot be read as a flag. store.ValidateGitURL rejects
+	// transport helpers before the row is stored, and gitEnv pins
+	// GIT_ALLOW_PROTOCOL so ext:: cannot execute a command. No shell.
 	cmd := exec.CommandContext(ctx, "git",
 		"clone", "--no-tags", "--filter=blob:none",
 		"--", gitURL, cacheDir,
@@ -274,6 +289,8 @@ func wipeAndClone(ctx context.Context, cacheDir, gitURL string) error {
 // status, and the captured stderr.
 func runGit(ctx context.Context, cacheDir string, args ...string) (string, error) {
 	full := append([]string{"-C", cacheDir}, args...)
+	// #nosec G204 -- binary is the literal "git"; args are internal literals
+	// plus cacheDir, which the relay derives from a hash. No shell.
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Env = gitEnv()
 	var stdout, stderr bytes.Buffer
@@ -287,13 +304,21 @@ func runGit(ctx context.Context, cacheDir string, args ...string) (string, error
 }
 
 // gitEnv returns the environment for git subprocesses: inherits the parent's
-// env plus GIT_TERMINAL_PROMPT=0 (no interactive prompts on auth failure) and
+// env plus GIT_TERMINAL_PROMPT=0 (no interactive prompts on auth failure),
 // neutralised global/system gitconfig (so a developer's local config can't
-// affect the relay).
+// affect the relay), and an explicit transport allowlist.
+//
+// GIT_ALLOW_PROTOCOL pins the set of transports rather than relying on git's
+// defaults. Current git already refuses ext:: (which would run an arbitrary
+// command as the relay user) unless it is enabled, but that is a default we
+// would rather not depend on: the upstream URL is caller-supplied, and a
+// downgrade to an older git or a future default change should not turn into
+// code execution here. Naming the transports makes the guarantee ours.
 func gitEnv() []string {
 	return append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_ALLOW_PROTOCOL="+strings.Join(store.AllowedGitProtocols, ":"),
 	)
 }
