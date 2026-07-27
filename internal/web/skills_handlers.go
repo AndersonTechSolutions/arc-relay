@@ -183,19 +183,23 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 		case http.MethodGet:
 			h.getSkill(w, skill)
 		case http.MethodPatch:
-			// Same gate as version uploads — admin or skills:write capability.
-			// Flipping visibility is a publish-decision, not a routine action,
-			// so admin issuance keeps it deliberate.
-			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:write") {
+			// Reaching the route needs publish rights; the visibility field
+			// inside it needs skills:admin, enforced in patchSkill. Editing a
+			// display name and deciding who receives the skill are different
+			// powers and no longer share a gate.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:publish") {
 				return
 			}
-			h.patchSkill(w, r, skill)
+			h.patchSkill(w, r, user, skill)
 		case http.MethodDelete:
-			if user.Role != "admin" {
-				writeJSONError(w, http.StatusForbidden, "admin access required")
+			// Yank is reversible and now grantable via skills:yank, which was
+			// previously declared in SupportedCapabilities but never checked —
+			// a key issued with it silently got nothing. Irreversible hard
+			// delete stays admin-only, enforced inside deleteSkill.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:yank") {
 				return
 			}
-			h.deleteSkill(w, r, skill)
+			h.deleteSkill(w, r, user, skill)
 		default:
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -230,9 +234,10 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 			}
 			h.handleCheckDrift(w, r, slug)
 		case "upstream":
-			// Admin OR API key with skills:write — same gate as version
-			// uploads, since this is the same kind of write to the same table.
-			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:write") {
+			// skills:admin, not publish: this configures a URL the relay
+			// itself clones on a cron, so it is a server-side fetch trigger
+			// rather than a publishing action.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:admin") {
 				return
 			}
 			h.handleUpstream(w, r, skill)
@@ -256,10 +261,10 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 				// Upload is gated by the `skills:write` capability so that
 				// non-admin keys (e.g. CI server keys) can publish skills
 				// without holding full admin powers. Admin keys bypass.
-				if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:write") {
+				if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:publish") {
 					return
 				}
-				h.uploadVersion(w, r, slug, version, user.ID)
+				h.uploadVersion(w, r, user, slug, version, user.ID)
 			case http.MethodDelete:
 				// Yank stays admin-only for now. Future enhancement: gate
 				// behind `skills:yank` + an `uploaded_by_api_key_id` check
@@ -408,7 +413,7 @@ type upstreamHeaderPayload struct {
 	Ref     string `json:"ref"`
 }
 
-func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, slug, version, uploaderID string) {
+func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, user *store.User, slug, version, uploaderID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, skills.MaxArchiveSize)
 	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
@@ -421,7 +426,16 @@ func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, s
 		writeJSONError(w, http.StatusBadRequest, "body unreadable")
 		return
 	}
+	// ?visibility=public on a first upload creates a skill that is implicitly
+	// assigned to every user, so a publish-only key could reach every
+	// workstation in a single request. Choosing the audience needs
+	// skills:admin; publishing the bytes does not.
 	visibility := r.URL.Query().Get("visibility")
+	if visibility != "" && !hasCapability(user, h.apiKeyFromCtx(r.Context()), "skills:admin") {
+		writeJSONError(w, http.StatusForbidden,
+			"setting ?visibility= requires the skills:admin capability; omit it to publish as restricted")
+		return
+	}
 	res, err := h.svc.Upload(&skills.UploadInput{
 		SlugOverride: slug,
 		Version:      version,
@@ -525,7 +539,7 @@ type patchSkillBody struct {
 //	400 — malformed JSON, unknown visibility, or empty body
 //	405 — non-PATCH (handled by the caller)
 //	415 — wrong Content-Type
-func (h *SkillsHandlers) patchSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+func (h *SkillsHandlers) patchSkill(w http.ResponseWriter, r *http.Request, user *store.User, skill *store.Skill) {
 	ct := r.Header.Get("Content-Type")
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = strings.TrimSpace(ct[:i])
@@ -549,6 +563,13 @@ func (h *SkillsHandlers) patchSkill(w http.ResponseWriter, r *http.Request, skil
 	}
 	if in.Visibility == nil && in.DisplayName == nil && in.Description == nil {
 		writeJSONError(w, http.StatusBadRequest, "patch body must include at least one of visibility, display_name, description")
+		return
+	}
+	// Flipping to public implicitly assigns the skill to every user, so this
+	// one field is what a publish-only key must not be able to reach.
+	if in.Visibility != nil && !hasCapability(user, h.apiKeyFromCtx(r.Context()), "skills:admin") {
+		writeJSONError(w, http.StatusForbidden,
+			"changing visibility requires the skills:admin capability")
 		return
 	}
 
@@ -596,9 +617,14 @@ func (h *SkillsHandlers) patchSkill(w http.ResponseWriter, r *http.Request, skil
 	writeJSON(w, http.StatusOK, map[string]any{"skill": updated})
 }
 
-func (h *SkillsHandlers) deleteSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill) {
+func (h *SkillsHandlers) deleteSkill(w http.ResponseWriter, r *http.Request, user *store.User, skill *store.Skill) {
 	hard := r.URL.Query().Get("hard") == "true"
 	if hard {
+		// Destroys the archive and its history; no capability grants this.
+		if user == nil || user.Role != "admin" {
+			writeJSONError(w, http.StatusForbidden, "hard delete requires admin access")
+			return
+		}
 		if err := h.store.DeleteSkill(skill.ID); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "internal error")
 			return

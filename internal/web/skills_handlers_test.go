@@ -1519,12 +1519,80 @@ func TestSkillsHandlers_PatchSkill_403NonAdminNoCap(t *testing.T) {
 	if rw.Code != http.StatusForbidden {
 		t.Errorf("non-admin no-cap = %d, want 403; body=%s", rw.Code, rw.Body.String())
 	}
-	if !strings.Contains(rw.Body.String(), "skills:write") {
+	if !strings.Contains(rw.Body.String(), "skills:publish") {
 		t.Errorf("403 body should name the missing capability; got %s", rw.Body.String())
 	}
 }
 
+// TestSkillsHandlers_PatchSkill_PassWithCapKey: a publish-capable key may edit
+// presentation metadata. Display name and description do not change who
+// receives the skill.
 func TestSkillsHandlers_PatchSkill_PassWithCapKey(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	rig.userToInject = rig.regularUser(t, "ci-user")
+	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:publish"}}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"display_name":"Demo Skill"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK {
+		t.Errorf("cap key PATCH = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_PatchSkill_PublishKeyCannotChangeVisibility is the
+// regression guard for the escalation this split closes.
+//
+// A public skill is implicitly assigned to every user (AssignedForUser matches
+// `visibility = 'public' OR an explicit assignment`), so `arc-sync skill sync`
+// installs it into every workstation's ~/.claude/skills. A key issued to a CI
+// server for publishing must therefore not be able to reach this field — until
+// the split it could, and the previous version of this test asserted that as
+// intended behaviour.
+func TestSkillsHandlers_PatchSkill_PublishKeyCannotChangeVisibility(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	rig.userToInject = rig.regularUser(t, "ci-user")
+	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:publish"}}
+
+	req := httptest.NewRequest("PATCH", "/api/skills/demo-skill",
+		strings.NewReader(`{"visibility":"public"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusForbidden {
+		t.Fatalf("publish-only key flipped visibility: got %d, want 403; body=%s",
+			rw.Code, rw.Body.String())
+	}
+
+	// And the skill really is still restricted — the 403 is not cosmetic.
+	sk, err := rig.store.GetSkillBySlug("demo-skill")
+	if err != nil || sk == nil {
+		t.Fatalf("re-read skill: %v", err)
+	}
+	if sk.Visibility != "restricted" {
+		t.Errorf("visibility = %q, want %q — the rejected patch still applied",
+			sk.Visibility, "restricted")
+	}
+}
+
+// A legacy skills:write key must behave exactly like skills:publish: it keeps
+// working for uploads, and it loses the audience-choosing power it used to
+// carry. This is the upgrade path for keys issued before the split.
+func TestSkillsHandlers_LegacyWriteKeyCannotChangeVisibility(t *testing.T) {
 	rig := newSkillsRig(t)
 	rig.userToInject = rig.admin
 	if _, err := rig.svc.Upload(&skills.UploadInput{
@@ -1540,8 +1608,9 @@ func TestSkillsHandlers_PatchSkill_PassWithCapKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rw := httptest.NewRecorder()
 	rig.mux.ServeHTTP(rw, req)
-	if rw.Code != http.StatusOK {
-		t.Errorf("cap key PATCH = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("legacy skills:write flipped visibility: got %d, want 403; body=%s",
+			rw.Code, rw.Body.String())
 	}
 }
 
@@ -1771,18 +1840,19 @@ func TestSkillsHandlers_SetUpstream_403NonAdminNoCap(t *testing.T) {
 	if rw.Code != http.StatusForbidden {
 		t.Errorf("non-admin no-cap = %d, want 403; body=%s", rw.Code, rw.Body.String())
 	}
-	if !strings.Contains(rw.Body.String(), "skills:write") {
+	if !strings.Contains(rw.Body.String(), "skills:admin") {
 		t.Errorf("403 body should name the missing capability; got %s", rw.Body.String())
 	}
 }
 
-// TestSkillsHandlers_SetUpstream_PassWithCapKey: non-admin user paired with an
-// API key carrying skills:write succeeds. This is the CI-server path the
-// design specifically calls out.
+// TestSkillsHandlers_SetUpstream_PassWithCapKey: a non-admin key carrying
+// skills:admin may configure the upstream. Setting it points the relay's own
+// checker cron at a URL it will clone, so it is an administrative act rather
+// than part of publishing — skills:admin, not skills:publish.
 func TestSkillsHandlers_SetUpstream_PassWithCapKey(t *testing.T) {
 	rig := newSkillsRig(t)
 	rig.userToInject = rig.regularUser(t, "ci-user")
-	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:write"}}
+	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:admin"}}
 	seedSkillBySlug(t, rig.store, "ci-skill")
 
 	req := httptest.NewRequest("PUT", "/api/skills/ci-skill/upstream",
@@ -1792,6 +1862,25 @@ func TestSkillsHandlers_SetUpstream_PassWithCapKey(t *testing.T) {
 	rig.mux.ServeHTTP(rw, req)
 	if rw.Code != http.StatusOK {
 		t.Errorf("cap key = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_SetUpstream_PublishKeyRejected: the CI-shaped key — one
+// issued only to publish versions — must not be able to aim the checker.
+// Regression guard for the capability split.
+func TestSkillsHandlers_SetUpstream_PublishKeyRejected(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.regularUser(t, "ci-user")
+	rig.apiKeyToInject = &store.APIKey{Capabilities: []string{"skills:publish"}}
+	seedSkillBySlug(t, rig.store, "ci-skill")
+
+	req := httptest.NewRequest("PUT", "/api/skills/ci-skill/upstream",
+		strings.NewReader(`{"git_url":"https://github.com/example/repo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("publish-only key = %d, want 403; body=%s", rw.Code, rw.Body.String())
 	}
 }
 

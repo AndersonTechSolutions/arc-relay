@@ -150,9 +150,21 @@
       </div>
       <div class="help">
         Grants the key access to admin-gated write endpoints without making it a full admin key.
-        <code>skills:write</code> covers <code>arc-sync skill push</code> + setting / clearing skill upstream tracking;
-        <code>recipes:write</code> covers <code>arc-sync recipe push</code> + recipe metadata edits.
         Omit for a regular key — admin users always pass these gates anyway.
+        <ul style="margin:0.4rem 0 0 1rem; padding:0;">
+          <li><code>skills:publish</code> — upload versions (<code>arc-sync skill push</code>).
+            This is what a CI key wants.</li>
+          <li><code>skills:admin</code> — set a skill's visibility, and configure the upstream
+            git URL the relay clones on a schedule. <strong>Marking a skill public assigns it to
+            every user</strong>, so it installs into everyone's <code>~/.claude/skills</code> on
+            their next sync. Grant only to keys you would trust with that reach.</li>
+          <li><code>skills:yank</code> — yank / unyank. Hard delete stays admin-only.</li>
+          <li><code>recipes:publish</code> / <code>recipes:admin</code> / <code>recipes:yank</code>
+            — the same split for recipes.</li>
+          <li><code>skills:write</code> and <code>recipes:write</code> are legacy names kept for
+            keys issued before the split. Each now grants only its <code>:publish</code>
+            successor; re-issue with <code>:admin</code> if a key genuinely needs the rest.</li>
+        </ul>
       </div>
     </div>
     {{end}}

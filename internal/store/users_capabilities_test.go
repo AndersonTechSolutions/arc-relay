@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -123,7 +124,10 @@ func TestCreateAPIKeyEmptyCapabilities(t *testing.T) {
 
 func TestSupportedCapabilitiesShape(t *testing.T) {
 	// Sanity check on the canonical list — ensures someone doesn't
-	// accidentally introduce a bad string or remove the four MVP entries.
+	// accidentally introduce a bad string or drop an entry keys were issued
+	// with. The original MVP four must stay listed even though skills:write
+	// and recipes:write are now legacy aliases: admins need to see what an
+	// already-issued key holds.
 	want := map[string]bool{
 		"skills:write":  true,
 		"skills:yank":   true,
@@ -134,12 +138,18 @@ func TestSupportedCapabilitiesShape(t *testing.T) {
 	for _, c := range store.SupportedCapabilities {
 		got[c] = true
 	}
-	if len(got) != len(want) {
-		t.Errorf("SupportedCapabilities count = %d, want %d", len(got), len(want))
-	}
 	for c := range want {
 		if !got[c] {
 			t.Errorf("SupportedCapabilities missing %q", c)
+		}
+	}
+	// Deliberately not an exact count: the list documents itself as
+	// "additive growth only", so pinning the length would fail every time a
+	// capability is legitimately added. Well-formedness is the real check.
+	for _, c := range store.SupportedCapabilities {
+		area, verb, ok := strings.Cut(c, ":")
+		if !ok || area == "" || verb == "" || strings.ToLower(c) != c {
+			t.Errorf("capability %q is malformed; want lowercase area:verb", c)
 		}
 	}
 }

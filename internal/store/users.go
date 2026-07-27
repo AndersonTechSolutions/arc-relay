@@ -46,10 +46,29 @@ type APIKey struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
-// HasCapability reports whether the key has been granted the named capability.
-// Pure check on the stored list — does NOT consider the owning user's admin
-// status. Callers that want admin-bypass semantics should use the middleware
-// helper requireCapability, which combines both.
+// legacyCapabilityGrants expands the pre-split capability names to what they
+// still confer.
+//
+// "skills:write" used to gate three unrelated powers at once: uploading a
+// version, choosing a skill's visibility, and setting the upstream git URL the
+// server-side checker clones. Only the first is what a publishing key needs.
+// The other two are what made a leaked CI key dangerous — a public skill is
+// implicitly assigned to every user (see AssignedForUser), so `arc-sync skill
+// sync` installs it into every workstation's ~/.claude/skills. The capability
+// read as "can publish skills" but meant "can put files on everyone's machine".
+//
+// Existing keys keep publish rights and lose the other two. That narrowing is
+// the point of the split, not an oversight: re-issue with skills:admin if a key
+// genuinely needs to set visibility or upstreams.
+var legacyCapabilityGrants = map[string][]string{
+	"skills:write":  {"skills:publish"},
+	"recipes:write": {"recipes:publish"},
+}
+
+// HasCapability reports whether the key has been granted the named capability,
+// resolving legacy aliases. Pure check on the stored list — does NOT consider
+// the owning user's admin status. Callers that want admin-bypass semantics
+// should use the middleware helper requireCapability, which combines both.
 func (k *APIKey) HasCapability(cap string) bool {
 	if k == nil {
 		return false
@@ -57,6 +76,11 @@ func (k *APIKey) HasCapability(cap string) bool {
 	for _, c := range k.Capabilities {
 		if c == cap {
 			return true
+		}
+		for _, granted := range legacyCapabilityGrants[c] {
+			if granted == cap {
+				return true
+			}
 		}
 	}
 	return false
@@ -358,12 +382,34 @@ func (s *UserStore) CreateAPIKey(userID, name string, profileID *string, capabil
 // SupportedCapabilities is the canonical list of capability strings the relay
 // recognizes. Issuing a key with a capability not in this list is allowed
 // (forward-compatible with future server versions) but the relay will simply
-// never check for it. Kept short on purpose — additive growth only.
+// never check for it.
+//
+// Every entry here must have a matching requireCapability call somewhere, or
+// the list lies to whoever is ticking the boxes: skills:yank and recipes:yank
+// were previously declared and never enforced, so a key issued with them
+// silently granted nothing.
+//
+// The publish/admin split exists because publishing a version and deciding who
+// receives it are different powers. Public skills are implicitly assigned to
+// every user, so visibility is what turns a publishing key into a way to reach
+// every workstation — see legacyCapabilityGrants.
 var SupportedCapabilities = []string{
-	"skills:write",
+	// Upload a new version. What a CI key should hold.
+	"skills:publish",
+	// Set visibility (on upload or patch) and configure the upstream git URL
+	// the server-side checker clones.
+	"skills:admin",
+	// Yank / unyank. Hard delete stays admin-only.
 	"skills:yank",
-	"recipes:write",
+
+	"recipes:publish",
+	"recipes:admin",
 	"recipes:yank",
+
+	// Legacy, retained so already-issued keys keep working. Each grants only
+	// its :publish successor — see legacyCapabilityGrants.
+	"skills:write",
+	"recipes:write",
 }
 
 // normalizeCapabilities trims, deduplicates, and sorts the input. Empty
