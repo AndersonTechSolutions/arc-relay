@@ -26,12 +26,21 @@ import (
 // without further round-trips. Internal "is this user admin" gating is
 // implementation detail and not surfaced.
 func requireCapability(w http.ResponseWriter, _ *http.Request, user *store.User, key *store.APIKey, cap string) bool {
-	if user != nil && user.Role == "admin" {
-		return true
-	}
-	if key != nil && key.HasCapability(cap) {
+	if hasCapability(user, key, cap) {
 		return true
 	}
 	writeJSONError(w, http.StatusForbidden, "missing capability: "+cap+" — admin must issue an API key with this capability before this endpoint will accept the request")
 	return false
+}
+
+// hasCapability answers the same question as requireCapability without writing
+// a response. Use it where a capability governs one *field* of an otherwise
+// permitted request — e.g. a publish-capable key may upload a version, but
+// choosing ?visibility= needs skills:admin — so the handler can reject just
+// that field with a specific message instead of failing the whole route.
+func hasCapability(user *store.User, key *store.APIKey, cap string) bool {
+	if user != nil && user.Role == "admin" {
+		return true
+	}
+	return key != nil && key.HasCapability(cap)
 }

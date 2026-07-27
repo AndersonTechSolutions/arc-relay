@@ -61,11 +61,12 @@ func (h *RecipesHandlers) HandleRecipes(w http.ResponseWriter, r *http.Request) 
 	case http.MethodGet:
 		h.list(w, user)
 	case http.MethodPost:
-		// Create is gated by `recipes:write` so non-admin keys can publish.
-		if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:write") {
+		// Publishing the recipe needs recipes:publish; choosing its audience
+		// (visibility) additionally needs recipes:admin, checked in create.
+		if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:publish") {
 			return
 		}
-		h.create(w, r, user.ID)
+		h.create(w, r, user, user.ID)
 	default:
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -132,19 +133,19 @@ func (h *RecipesHandlers) HandleRecipeByPath(w http.ResponseWriter, r *http.Requ
 		case http.MethodGet:
 			writeJSON(w, http.StatusOK, recipe)
 		case http.MethodPatch:
-			// PATCH is treated as an update-in-place — same capability as POST.
-			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:write") {
+			// PATCH is an update-in-place — same publish gate as POST, with
+			// the visibility field gated separately inside update.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:publish") {
 				return
 			}
-			h.update(w, r, recipe)
+			h.update(w, r, user, recipe)
 		case http.MethodDelete:
-			// DELETE stays admin-only. Future enhancement: gate behind
-			// `recipes:yank` once we add an upload-ownership column.
-			if user.Role != "admin" {
-				writeJSONError(w, http.StatusForbidden, "admin access required")
+			// Yank is reversible and grantable via recipes:yank. Irreversible
+			// hard delete stays admin-only, enforced inside delete.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:yank") {
 				return
 			}
-			h.delete(w, r, recipe)
+			h.delete(w, r, user, recipe)
 		default:
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -228,7 +229,7 @@ type createBody struct {
 	Visibility  string          `json:"visibility"`
 }
 
-func (h *RecipesHandlers) create(w http.ResponseWriter, r *http.Request, uploaderID string) {
+func (h *RecipesHandlers) create(w http.ResponseWriter, r *http.Request, user *store.User, uploaderID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, recipesBodyLimit)
 	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
@@ -244,6 +245,14 @@ func (h *RecipesHandlers) create(w http.ResponseWriter, r *http.Request, uploade
 	var in createBody
 	if err := json.Unmarshal(body, &in); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	// A public recipe is implicitly assigned to every user, exactly as with
+	// skills, so setting this field is an audience decision rather than a
+	// publishing one.
+	if strings.TrimSpace(in.Visibility) != "" && !hasCapability(user, h.apiKeyFromCtx(r.Context()), "recipes:admin") {
+		writeJSONError(w, http.StatusForbidden,
+			"setting visibility requires the recipes:admin capability")
 		return
 	}
 	res, err := h.svc.Create(&recipes.CreateInput{
@@ -278,7 +287,7 @@ type updateBody struct {
 	RecipeData  json.RawMessage `json:"recipe_data"` // empty = preserve
 }
 
-func (h *RecipesHandlers) update(w http.ResponseWriter, r *http.Request, recipe *store.SetupRecipe) {
+func (h *RecipesHandlers) update(w http.ResponseWriter, r *http.Request, user *store.User, recipe *store.SetupRecipe) {
 	r.Body = http.MaxBytesReader(w, r.Body, recipesBodyLimit)
 	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
@@ -294,6 +303,14 @@ func (h *RecipesHandlers) update(w http.ResponseWriter, r *http.Request, recipe 
 	var in updateBody
 	if err := json.Unmarshal(body, &in); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	// A public recipe is implicitly assigned to every user, exactly as with
+	// skills, so setting this field is an audience decision rather than a
+	// publishing one.
+	if strings.TrimSpace(in.Visibility) != "" && !hasCapability(user, h.apiKeyFromCtx(r.Context()), "recipes:admin") {
+		writeJSONError(w, http.StatusForbidden,
+			"setting visibility requires the recipes:admin capability")
 		return
 	}
 	res, err := h.svc.Update(recipe.ID, &recipes.UpdateInput{
@@ -317,9 +334,14 @@ func (h *RecipesHandlers) update(w http.ResponseWriter, r *http.Request, recipe 
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (h *RecipesHandlers) delete(w http.ResponseWriter, r *http.Request, recipe *store.SetupRecipe) {
+func (h *RecipesHandlers) delete(w http.ResponseWriter, r *http.Request, user *store.User, recipe *store.SetupRecipe) {
 	hard := r.URL.Query().Get("hard") == "true"
 	if hard {
+		// Irreversible; no capability grants this.
+		if user == nil || user.Role != "admin" {
+			writeJSONError(w, http.StatusForbidden, "hard delete requires admin access")
+			return
+		}
 		if err := h.store.DeleteRecipe(recipe.ID); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "internal error")
 			return
