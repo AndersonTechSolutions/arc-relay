@@ -131,6 +131,8 @@ T3 threads on Mint: `codex` 365, `claudeAgent` 88, `cursor` 1. Mint holds 2,027 
 
 **Inserts:** `INSERT … ON CONFLICT(session_id, uuid) DO NOTHING`. `MessagesAdded` = sum of `RowsAffected`.
 
+**Measured (2026-09-17, `.backup` copy of prod, SQLite 3.53 in `python:3.12-alpine`, script `memory_dedup_dryrun.py`):** live DB 1,752 MB + 165 MB WAL, 700,046 rows. Pre-migration FTS `integrity-check, 1` **OK**. Boot `PRAGMA integrity_check` 34 s · DELETE 27,587 rows 18 s · FTS `'rebuild'` 94 s · unique index 5 s · COMMIT 13 s → **≈2.8 min migration; plan a 3–4 min outage** with container stop/start. WAL peaked at 552 MB. Post: 0 duplicate groups, FTS OK, `MATCH` probe counts −4 % (the removed duplicates), `ON CONFLICT DO NOTHING` rowcount 0. Container healthcheck: `wget /health` 30 s × 3 retries, start period 0, `restart=unless-stopped` — shows unhealthy during the migration, does not boot-loop.
+
 **Migration procedure** (no maintenance mode exists; `store.Open` runs `integrity_check` + migrations before HTTP):
 1. **Dry run on a consistent copy** (`.backup` of prod while running is consistent). On the copy, in order:
    - `INSERT INTO memory_messages_fts(memory_messages_fts, rank) VALUES('integrity-check', 1)` — **abort the plan if this fails** before anything destructive.

@@ -5,10 +5,12 @@ package memory
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/memory/parser"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -28,10 +30,23 @@ type IngestRequest struct {
 	// JSONL is the raw transcript bytes. Go's encoding/json marshals []byte as
 	// base64 on the wire; the watcher and the handler both rely on that default.
 	JSONL []byte `json:"jsonl"`
+
+	// Source identity, insert-only (Phase 3 sources fill these; the Claude
+	// watcher may leave them empty).
+	RawCwd                string `json:"raw_cwd,omitempty"`
+	ProjectKey            string `json:"project_key,omitempty"`
+	IsSubagent            bool   `json:"is_subagent,omitempty"`
+	SourceParentSessionID string `json:"source_parent_session_id,omitempty"`
+	// ClientCounters are watcher-side diagnostics (skipped_records, ...)
+	// persisted per session and aggregated by Stats. Replaced on every ingest
+	// that sends them.
+	ClientCounters map[string]int64 `json:"client_counters,omitempty"`
 }
 
 // IngestResponse is returned to the caller on success.
 type IngestResponse struct {
+	// MessagesAdded counts rows actually stored; replayed duplicates are not
+	// counted, so a watcher re-sending a chunk sees 0.
 	MessagesAdded int   `json:"messages_added"`
 	EventsAdded   int   `json:"events_added"`
 	BytesSeen     int64 `json:"bytes_seen"`
@@ -41,16 +56,21 @@ type IngestResponse struct {
 type Service struct {
 	sessions *store.SessionMemoryStore
 	messages *store.MessageStore
+	now      func() time.Time // injectable for tests
 }
 
 // NewService creates a Service backed by the given stores.
 func NewService(sessions *store.SessionMemoryStore, messages *store.MessageStore) *Service {
-	return &Service{sessions: sessions, messages: messages}
+	return &Service{sessions: sessions, messages: messages, now: time.Now}
 }
 
 // Ingest parses a JSONL chunk under the calling user's identity and persists
-// rows. Idempotent: messages with a uuid that already exists are dropped via
-// SQLite's unique index on memory_messages.uuid.
+// rows. Idempotent: a message whose (session_id, uuid) already exists is
+// dropped by the unique index from migration 003. Atomic: the ownership
+// check, the session upsert, the message inserts, and the ingest stamps
+// commit together, so a session row never advertises messages that were
+// rolled back and another user's session_id is never written into
+// (store.ErrForeignSession).
 func (s *Service) Ingest(userID string, req *IngestRequest) (*IngestResponse, error) {
 	if req.SessionID == "" {
 		return nil, fmt.Errorf("session_id is required")
@@ -63,37 +83,123 @@ func (s *Service) Ingest(userID string, req *IngestRequest) (*IngestResponse, er
 		return nil, fmt.Errorf("unknown platform %q", req.Platform)
 	}
 
-	if err := s.sessions.Upsert(&store.MemorySession{
-		SessionID:  req.SessionID,
-		UserID:     userID,
-		ProjectDir: req.ProjectDir,
-		FilePath:   req.FilePath,
-		FileMtime:  req.FileMtime,
-		IndexedAt:  req.FileMtime,
-		LastSeenAt: req.FileMtime,
-		Platform:   req.Platform,
-		BytesSeen:  req.BytesSeen,
-	}); err != nil {
-		return nil, fmt.Errorf("upsert session: %w", err)
-	}
-
+	// Parse outside the transaction: a parse failure must not hold a write
+	// lock, and it writes nothing.
 	msgs, events, err := p.Parse(bytes.NewReader(req.JSONL))
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
 	for _, m := range msgs {
 		m.SessionID = req.SessionID
+		m.Platform = req.Platform
 	}
-	if err := s.messages.BulkInsert(msgs); err != nil {
+	activity := newestTimestamp(msgs)
+	counters := ""
+	if req.ClientCounters != nil {
+		if b, err := json.Marshal(req.ClientCounters); err == nil {
+			counters = string(b)
+		}
+	}
+
+	tx, err := s.messages.DB().Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin ingest: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	owner, exists, err := s.sessions.OwnerTx(tx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if exists && owner != userID {
+		return nil, store.ErrForeignSession
+	}
+
+	if err := s.sessions.UpsertTx(tx, &store.MemorySession{
+		SessionID:             req.SessionID,
+		UserID:                userID,
+		ProjectDir:            req.ProjectDir,
+		FilePath:              req.FilePath,
+		FileMtime:             req.FileMtime,
+		IndexedAt:             req.FileMtime,
+		LastSeenAt:            req.FileMtime,
+		Platform:              req.Platform,
+		BytesSeen:             req.BytesSeen,
+		RawCwd:                req.RawCwd,
+		ProjectKey:            req.ProjectKey,
+		IsSubagent:            req.IsSubagent,
+		SourceParentSessionID: req.SourceParentSessionID,
+	}); err != nil {
+		return nil, fmt.Errorf("upsert session: %w", err)
+	}
+
+	stored, err := s.messages.BulkInsertTx(tx, msgs)
+	if err != nil {
 		return nil, fmt.Errorf("bulk insert: %w", err)
+	}
+	if err := s.sessions.RecordIngestTx(tx, req.SessionID, float64(s.now().UnixNano())/1e9, activity, counters); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit ingest: %w", err)
 	}
 	// CompactEvents persistence is Phase 4 (LLM observation layer). v1 returns
 	// the count for diagnostics but does not write a memory_compact_events row.
 	return &IngestResponse{
-		MessagesAdded: len(msgs),
+		MessagesAdded: stored,
 		EventsAdded:   len(events),
 		BytesSeen:     req.BytesSeen,
 	}, nil
+}
+
+// SessionOwnedBy reports whether sessionID exists and belongs to userID. It
+// reads one column; use it for authorization instead of loading messages.
+func (s *Service) SessionOwnedBy(userID, sessionID string) (bool, error) {
+	owner, exists, err := s.sessions.Owner(sessionID)
+	if err != nil {
+		return false, err
+	}
+	return exists && owner == userID, nil
+}
+
+// timestampLayouts are tried in order when deriving last_activity_at.
+// Claude Code writes RFC 3339 with milliseconds and 'Z'; Codex writes RFC
+// 3339 with an offset; the normalized Phase 3 wire shape is plain RFC 3339.
+var timestampLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05.000Z07:00",
+	"2006-01-02 15:04:05",
+}
+
+func parseTimestamp(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	for _, layout := range timestampLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return float64(t.UnixNano()) / 1e9, true
+		}
+	}
+	return 0, false
+}
+
+// newestTimestamp returns the newest parseable message timestamp, or nil when
+// none parse, in which case last_activity_at is left unchanged.
+func newestTimestamp(msgs []*store.Message) *float64 {
+	var newest *float64
+	for _, m := range msgs {
+		ts, ok := parseTimestamp(m.Timestamp)
+		if !ok {
+			continue
+		}
+		if newest == nil || ts > *newest {
+			v := ts
+			newest = &v
+		}
+	}
+	return newest
 }
 
 // Search routes the query through FTS5 BM25 by default, falling back to a Go
@@ -203,18 +309,36 @@ func (s *Service) SessionMessageCount(sessionID string) (int, error) {
 // Stats is the diagnostic shape returned by HandleStats — global counts,
 // not user-scoped (count != content; safe to surface).
 type Stats struct {
-	DBBytes      int64    `json:"db_bytes"`
-	Sessions     int64    `json:"sessions"`
-	Messages     int64    `json:"messages"`
-	LastIngestAt float64  `json:"last_ingest_at"`
-	Platforms    []string `json:"platforms"`
+	DBBytes  int64 `json:"db_bytes"`
+	Sessions int64 `json:"sessions"`
+	Messages int64 `json:"messages"`
+	// LastIngestAt is the newest server receipt time (last_ingested_at).
+	// Sessions ingested before migration 003 have no receipt time, so on a
+	// deployment with no ingest since the migration this is 0.
+	LastIngestAt float64 `json:"last_ingest_at"`
+	// LastActivityAt is the newest message timestamp seen across sessions —
+	// the old "last ingest" semantics (client-side time), kept for context.
+	LastActivityAt float64 `json:"last_activity_at"`
+	// Platforms lists the parsers this relay accepts.
+	Platforms []string `json:"platforms"`
+	// MessagesByPlatform counts stored rows per platform (indexed column).
+	MessagesByPlatform map[string]int64 `json:"messages_by_platform"`
+	// ClientCounters sums the watcher-side counters across sessions.
+	ClientCounters map[string]int64 `json:"client_counters"`
 }
 
-// Stats returns DB-level counts + last-ingest timestamp + the parser registry's
-// supported platforms. Used by `arc-sync memory stats` and (future) the
-// dashboard.
+// Stats returns DB-level counts + ingest timestamps + per-platform message
+// counts + aggregated client counters. Used by `arc-sync memory stats` and
+// the dashboard.
 func (s *Service) Stats() (*Stats, error) {
-	st := &Stats{Platforms: parser.Platforms()}
+	st := &Stats{
+		Platforms:          parser.Platforms(),
+		MessagesByPlatform: map[string]int64{},
+		ClientCounters:     map[string]int64{},
+	}
+	if err := s.statsPlatformsAndCounters(st); err != nil {
+		return nil, err
+	}
 
 	// page_count * page_size — the actual on-disk database size.
 	if err := s.messages.DB().QueryRow(
@@ -233,11 +357,50 @@ func (s *Service) Stats() (*Stats, error) {
 		return nil, fmt.Errorf("messages count: %w", err)
 	}
 	if err := s.messages.DB().QueryRow(
-		`SELECT COALESCE(MAX(last_seen_at), 0) FROM memory_sessions`,
-	).Scan(&st.LastIngestAt); err != nil {
+		`SELECT COALESCE(MAX(last_ingested_at), 0), COALESCE(MAX(last_activity_at), 0) FROM memory_sessions`,
+	).Scan(&st.LastIngestAt, &st.LastActivityAt); err != nil {
 		return nil, fmt.Errorf("last ingest: %w", err)
 	}
 	return st, nil
+}
+
+// statsPlatformsAndCounters fills MessagesByPlatform (one indexed GROUP BY)
+// and sums every session's client_counters JSON blob into ClientCounters.
+func (s *Service) statsPlatformsAndCounters(st *Stats) error {
+	rows, err := s.messages.DB().Query(`SELECT platform, COUNT(*) FROM memory_messages GROUP BY platform`)
+	if err != nil {
+		return fmt.Errorf("messages by platform: %w", err)
+	}
+	for rows.Next() {
+		var p string
+		var n int64
+		if err := rows.Scan(&p, &n); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		st.MessagesByPlatform[p] = n
+	}
+	_ = rows.Close()
+
+	crows, err := s.messages.DB().Query(`SELECT client_counters FROM memory_sessions WHERE client_counters IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("client counters: %w", err)
+	}
+	defer func() { _ = crows.Close() }()
+	for crows.Next() {
+		var blob string
+		if err := crows.Scan(&blob); err != nil {
+			return err
+		}
+		var m map[string]int64
+		if json.Unmarshal([]byte(blob), &m) != nil {
+			continue // a malformed blob is a client bug, not a stats outage
+		}
+		for k, v := range m {
+			st.ClientCounters[k] += v
+		}
+	}
+	return crows.Err()
 }
 
 // hasRegexMeta detects FTS5-incompatible characters that should route to the

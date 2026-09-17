@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -45,7 +46,21 @@ type Service struct {
 	chunkTarget    int
 	requestTimeout time.Duration
 	locks          sync.Map // session_id -> *sync.Mutex
+
+	// Phase 0 (spec §4.1 P0-S4/S5): bounded passes, poison-after, single
+	// admission queue and call-rate limit.
+	passLimit       int          // messages loaded per pass
+	poisonAfter     int          // consecutive failed attempts before a range is abandoned
+	maxMessageChars int          // hard truncation of one message before chunking
+	limiter         *RateLimiter // nil = unlimited
+	queue           *Queue       // nil until StartQueue
+	now             func() time.Time
 }
+
+// SetRateLimiter installs the backend call-rate limit. Nil disables it.
+func (s *Service) SetRateLimiter(r *RateLimiter) { s.limiter = r }
+
+func (s *Service) nowUnix() float64 { return float64(s.now().UnixNano()) / 1e9 }
 
 // SetClassifier wires an optional classifier into the service. When set, every
 // chunk gets a `category` field added to its mem0 metadata before sending.
@@ -83,6 +98,12 @@ func NewService(sessions *store.SessionMemoryStore, messages *store.MessageStore
 		// chunks miss the previous 60s budget under load, while mem0's
 		// container is far from saturated — the wait is OpenAI latency.
 		requestTimeout: 180 * time.Second,
+		// 400 messages ≈ ≤135 chunks: every pass terminates well inside the
+		// queue's pass timeout even at the default 300 calls/hour.
+		passLimit:       400,
+		poisonAfter:     4,
+		maxMessageChars: 12000,
+		now:             time.Now,
 	}
 }
 
@@ -96,7 +117,19 @@ type ExtractResult struct {
 	ChunksProcessed int
 	MemoriesCreated int
 	Errors          []string
+	// ThroughID is the highest message id the pass considered; Outcome is
+	// one of nothing_new, advanced_no_content, complete, failed, poisoned.
+	ThroughID int64
+	Outcome   string
 }
+
+const (
+	OutcomeNothingNew        = "nothing_new"
+	OutcomeAdvancedNoContent = "advanced_no_content"
+	OutcomeComplete          = "complete"
+	OutcomeFailed            = "failed"
+	OutcomePoisoned          = "poisoned"
+)
 
 // ErrBackendUnavailable is returned when the mem0 (code-memory) backend
 // isn't registered yet. Callers should treat this as transient — the cron
@@ -119,24 +152,41 @@ func (s *Service) Extract(ctx context.Context, sessionID string) (*ExtractResult
 	lock.Lock()
 	defer lock.Unlock()
 
-	// 1. Load session
+	// 1. Load session + extraction bookkeeping
 	sess, err := s.sessions.Get(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
+	state, err := s.sessions.GetExtractionState(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get extraction state: %w", err)
+	}
+	after := int64(0)
+	if state.ExtractedThroughMsgID.Valid {
+		after = state.ExtractedThroughMsgID.Int64
+	}
 
-	// 2. Load messages (full session — idempotency check below skips the
-	// already-extracted ones)
-	msgs, err := s.messages.GetSession(sessionID, 0)
+	// 2. Load one bounded window above the watermark. A pass is therefore
+	// always finite; large sessions walk forward over successive passes.
+	msgs, err := s.messages.GetSessionRange(sessionID, after, s.passLimit)
 	if err != nil {
 		return nil, fmt.Errorf("get messages: %w", err)
 	}
+	result := &ExtractResult{SessionID: sessionID, ThroughID: after}
+	if len(msgs) == 0 {
+		result.Outcome = OutcomeNothingNew
+		return result, nil
+	}
+	throughID := msgs[len(msgs)-1].ID
+	result.ThroughID = throughID
 
-	// 3. Filter (tiers 1-3)
+	// 3. Filter (tiers 1-3). Filtered rows count as processed: the watermark
+	// covers them once the pass completes.
 	kept, fstats := Filter(msgs)
 
-	// 4. Idempotency: skip messages already covered by prior extraction rows
-	covered, err := s.coveredUUIDs(sessionID)
+	// 4. Idempotency inside the window: skip messages a successful chunk
+	// already sent (retries after a partial failure never re-spend).
+	covered, err := s.extractions.CoveredUUIDs(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("idempotency check: %w", err)
 	}
@@ -146,38 +196,54 @@ func (s *Service) Extract(ctx context.Context, sessionID string) (*ExtractResult
 			fresh = append(fresh, m)
 		}
 	}
+	result.MessagesTotal = fstats.Total
+	result.MessagesKept = fstats.KeptCount
+	result.MessagesNew = len(fresh)
 
-	result := &ExtractResult{
-		SessionID:     sessionID,
-		MessagesTotal: fstats.Total,
-		MessagesKept:  fstats.KeptCount,
-		MessagesNew:   len(fresh),
-	}
-
-	// Early return if no new content
+	now := s.nowUnix()
 	if len(fresh) == 0 {
-		now := float64(time.Now().Unix())
-		_ = s.sessions.MarkExtracted(sessionID, now)
-		slog.Info("extract: nothing new",
-			"session", sessionID, "total", fstats.Total, "kept", fstats.KeptCount)
+		if err := s.sessions.CompleteExtractPass(sessionID, throughID, now); err != nil {
+			return nil, err
+		}
+		result.Outcome = OutcomeAdvancedNoContent
+		slog.Info("extract: window had no new content; watermark advanced",
+			"session", sessionID, "through_id", throughID, "total", fstats.Total, "kept", fstats.KeptCount)
 		return result, nil
 	}
 
-	// 5. Chunk
+	// 5. Bound single messages, then chunk.
+	truncateOversized(fresh, s.maxMessageChars)
 	chunks := ChunkMessages(fresh, s.chunkTarget)
 	result.ChunksProcessed = len(chunks)
 
-	// 6. Resolve backend lazily — fail before any LLM call if mem0 is down
+	// 6. Resolve backend lazily — fail before any LLM call if mem0 is down.
 	backend, ok := s.backend()
 	if !ok {
 		return nil, ErrBackendUnavailable
 	}
+	if err := s.sessions.BeginExtractAttempt(sessionID, now); err != nil {
+		return nil, err
+	}
 
-	// 7. For each chunk: call mem0.add_memory, record provenance row
-	agentID := Derive(sess.ProjectDir)
-	now := float64(time.Now().Unix())
+	// 7. For each chunk: call mem0.add_memory, record provenance.
+	source := sess.ProjectDir
+	if sess.ProjectKey != "" {
+		source = sess.ProjectKey
+	}
+	agentID := Derive(source)
+	failed, aborted := false, false
 	for i, c := range chunks {
+		if ctx.Err() != nil {
+			// Pass deadline: stop here without writing a failure row per
+			// remaining chunk. The attempt still counts.
+			aborted = true
+			break
+		}
 		memIDs, callErr := s.callAddMemoryWithRetry(ctx, backend, c, agentID, sess)
+		if ctx.Err() != nil {
+			aborted = true
+			break
+		}
 
 		uuidsJSON, _ := json.Marshal(c.UUIDs)
 		idsJSON, _ := json.Marshal(memIDs)
@@ -191,64 +257,82 @@ func (s *Service) Extract(ctx context.Context, sessionID string) (*ExtractResult
 			Mem0Count:     len(memIDs),
 		}
 		if callErr != nil {
+			failed = true
 			row.Error.String = callErr.Error()
 			row.Error.Valid = true
 			result.Errors = append(result.Errors, callErr.Error())
 			slog.Warn("extract: chunk failed",
-				"session", sessionID,
-				"chunk", i,
-				"chunk_chars", c.Chars,
-				"err", callErr.Error())
+				"session", sessionID, "chunk", i, "chunk_chars", c.Chars, "err", callErr.Error())
 		} else {
 			result.MemoriesCreated += len(memIDs)
 		}
 		if insErr := s.extractions.Insert(row); insErr != nil {
+			// Unrecorded work must not advance the watermark: a success we
+			// cannot prove would be re-sent by the next pass anyway.
+			failed = true
+			result.Errors = append(result.Errors, "provenance insert: "+insErr.Error())
 			slog.Error("extract: insert provenance row failed",
 				"session", sessionID, "chunk", i, "err", insErr)
-			// Don't return — continue with remaining chunks; we still want partial progress.
 		}
 	}
 
-	// 8. Stamp last_extracted_at — even on partial failure cron will only
-	// re-pick if last_seen_at advances, and the idempotency guard above
-	// won't re-call mem0 for chunks we already inserted rows for.
-	_ = s.sessions.MarkExtracted(sessionID, now)
+	// 8. Advance only on a fully successful pass; otherwise count the
+	// attempt and, after poisonAfter consecutive failures, abandon the range
+	// so one bad message cannot block the rest of the session forever.
+	switch {
+	case failed || aborted:
+		attempts, err := s.sessions.FailExtractPass(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if attempts >= s.poisonAfter {
+			if err := s.sessions.PoisonExtractRange(sessionID, throughID, now); err != nil {
+				return nil, err
+			}
+			result.Outcome = OutcomePoisoned
+			slog.Warn("extract: range poisoned after repeated failures",
+				"session", sessionID, "through_id", throughID, "attempts", attempts)
+		} else {
+			result.Outcome = OutcomeFailed
+		}
+	default:
+		if err := s.sessions.CompleteExtractPass(sessionID, throughID, now); err != nil {
+			return nil, err
+		}
+		result.Outcome = OutcomeComplete
+	}
 
-	slog.Info("extract: complete",
+	slog.Info("extract: pass finished",
 		"session", sessionID,
+		"outcome", result.Outcome,
+		"through_id", throughID,
 		"total", fstats.Total,
 		"kept", fstats.KeptCount,
 		"new", len(fresh),
 		"chunks", len(chunks),
 		"mems", result.MemoriesCreated,
-		"errors", len(result.Errors))
+		"errors", len(result.Errors),
+		"aborted", aborted)
 
 	return result, nil
 }
 
-// coveredUUIDs returns the set of message UUIDs that have already been
-// included in a prior memory_extractions row for this session.
-func (s *Service) coveredUUIDs(sessionID string) (map[string]bool, error) {
-	rows, err := s.extractions.ListBySession(sessionID)
-	if err != nil {
-		return nil, err
+// truncateOversized caps a single message's content before chunking so one
+// pathological row cannot become an oversized backend call.
+func truncateOversized(msgs []*store.Message, max int) {
+	if max <= 0 {
+		return
 	}
-	out := map[string]bool{}
-	for _, r := range rows {
-		if r.Error.Valid {
-			// Don't treat failed chunks as "covered" — let the next pass
-			// retry them.
+	for _, m := range msgs {
+		if len(m.Content) <= max {
 			continue
 		}
-		var uuids []string
-		if err := json.Unmarshal([]byte(r.ChunkMsgUUIDs), &uuids); err != nil {
-			continue
+		cut := max
+		for cut > 0 && !utf8.RuneStart(m.Content[cut]) {
+			cut--
 		}
-		for _, u := range uuids {
-			out[u] = true
-		}
+		m.Content = m.Content[:cut] + fmt.Sprintf("\n…[truncated %d bytes]", len(m.Content)-cut)
 	}
-	return out, nil
 }
 
 // addMemoryArgs is what we send to the code-memory MCP server's add_memory
@@ -282,6 +366,11 @@ func (s *Service) callAddMemoryWithRetry(ctx context.Context, backend Backend, c
 		// Bail out if the parent context is already cancelled — no point
 		// burning a fresh per-call deadline on a doomed call.
 		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// One token per attempted call, taken before the classifier runs
+		// inside callAddMemory, so retries and classification are counted.
+		if err := s.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
 		callCtx, cancel := context.WithTimeout(ctx, s.requestTimeout)

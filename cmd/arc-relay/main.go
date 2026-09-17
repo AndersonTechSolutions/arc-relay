@@ -317,8 +317,26 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Phase B: cron extraction backstop. Cancels when ctx is canceled at
-	// shutdown. Logs cycle stats at INFO every 30 min.
+	// Phase 0: one extraction admission queue. Watcher-triggered and cron
+	// extractions pass the same eligibility gate and share the worker pool
+	// and the backend call-rate limit, so backfill cannot burst spend.
+	qcfg := extractor.DefaultQueueConfig()
+	qcfg.Eligibility.Platforms = envCSV("ARC_RELAY_EXTRACT_PLATFORMS", qcfg.Eligibility.Platforms)
+	if days := envInt("ARC_RELAY_EXTRACT_MAX_AGE_DAYS", 30); days > 0 {
+		qcfg.Eligibility.MaxAge = time.Duration(days) * 24 * time.Hour
+	}
+	qcfg.Workers = envInt("ARC_RELAY_EXTRACT_WORKERS", qcfg.Workers)
+	callsPerHour := envInt("ARC_RELAY_EXTRACT_CALLS_PER_HOUR", 300)
+	extractorSvc.SetRateLimiter(extractor.NewRateLimiter(callsPerHour, 60))
+	extractorSvc.StartQueue(ctx, qcfg)
+	slog.Info("memory extraction gates",
+		"platforms", qcfg.Eligibility.Platforms,
+		"max_age", qcfg.Eligibility.MaxAge,
+		"workers", qcfg.Workers,
+		"calls_per_hour", callsPerHour)
+
+	// Cron backstop: enqueues eligible sessions every 30 min and prunes old
+	// failure rows. Cancels when ctx is canceled at shutdown.
 	go extractorSvc.RunCron(ctx, 30*time.Minute)
 
 	if skillChecker != nil {

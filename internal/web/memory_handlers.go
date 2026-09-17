@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/memory/extractor"
@@ -88,6 +87,12 @@ func (h *MemoryHandlers) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.svc.Ingest(userID, &req)
 	if err != nil {
 		slog.Warn("memory ingest", "user", userID, "session", req.SessionID, "err", err)
+		// A session_id already owned by another user is a permanent conflict
+		// for these bytes: the watcher must stop retrying them (409, not 5xx).
+		if errors.Is(err, store.ErrForeignSession) {
+			http.Error(w, "session belongs to another user", http.StatusConflict)
+			return
+		}
 		// User-input validation errors render as 400; storage errors as 500.
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -267,6 +272,9 @@ func (h *MemoryHandlers) HandleStats(w http.ResponseWriter, r *http.Request) {
 // SessionID is required and must belong to the authenticated user.
 type runExtractionRequest struct {
 	SessionID string `json:"session_id"`
+	// Mode is "auto" (default, gated) or "manual" (skips age/platform/quiet
+	// gates; `arc-sync memory extract <id>` sends it).
+	Mode string `json:"mode,omitempty"`
 }
 
 // HandleExtract kicks off LLM extraction on one session. Wired at
@@ -314,41 +322,37 @@ func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ownership check — fetch session and confirm user_id matches. Return
+	// Ownership check on one indexed column — never load the session's
+	// messages just to authorize (a Codex session can be 50 MB). Return
 	// 404 (not 403) for foreign sessions to avoid leaking existence.
-	sess, _, err := h.svc.GetSessionWithMessages(userID, req.SessionID, 0)
-	if err != nil || sess == nil {
+	owned, err := h.svc.SessionOwnedBy(userID, req.SessionID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !owned {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Detach from request context so a client disconnect (CF 524, watcher
-	// goes away) doesn't cancel a multi-minute extraction. The per-session
-	// mutex inside extractor.Extract serializes if a duplicate request
-	// arrives.
-	// #nosec G118 -- deliberate: the handler returns 202 immediately, so the
-	// request context is cancelled the moment the response is written and
-	// would kill a multi-minute extraction. Bounded instead by an explicit
-	// 30-minute timeout.
-	go func(sid, uid string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		res, err := h.extractor.Extract(ctx, sid)
-		if err != nil {
-			slog.Error("async extraction failed", "session", sid, "user", uid, "err", err)
-			return
-		}
-		slog.Info("async extraction complete",
-			"session", sid,
-			"user", uid,
-			"chunks", res.ChunksProcessed,
-			"mems", res.MemoriesCreated,
-			"errors", len(res.Errors))
-	}(req.SessionID, userID)
+	// Every extraction goes through the admission queue: automatic requests
+	// (the default when mode is absent, which is what every pre-Phase-0
+	// client sends) must pass the eligibility gate; manual ones skip the
+	// age/platform/quiet gates but never the subagent rule. 202 always
+	// carries `queued` + `reason` so the operator can see a rejected request
+	// instead of a silent no-op.
+	mode := extractor.ModeAuto
+	if req.Mode == string(extractor.ModeManual) {
+		mode = extractor.ModeManual
+	}
+	queued, reason := h.extractor.Enqueue(req.SessionID, mode)
+	slog.Info("extraction requested",
+		"session", req.SessionID, "user", userID, "mode", mode, "queued", queued, "reason", reason)
 
 	writeMemoryJSON(w, http.StatusAccepted, map[string]any{
 		"session_id": req.SessionID,
-		"status":     "accepted",
-		"note":       "Extraction running asynchronously. Watch the relay log or query memory_extractions for completion.",
+		"mode":       string(mode),
+		"queued":     queued,
+		"reason":     reason,
 	})
 }
