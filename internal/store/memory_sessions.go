@@ -1,11 +1,17 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 )
 
+// ErrForeignSession is returned when a caller tries to write into a session
+// that already belongs to a different user. Handlers map it to 409.
+var ErrForeignSession = errors.New("session belongs to another user")
+
 // MemorySession is one row in memory_sessions — metadata about a transcript file.
-// One session_id maps 1:1 to one ~/.claude/projects/.../<uuid>.jsonl file.
+// One session_id maps 1:1 to one transcript file on the client.
 type MemorySession struct {
 	SessionID   string
 	UserID      string
@@ -17,6 +23,20 @@ type MemorySession struct {
 	CustomTitle string
 	Platform    string
 	BytesSeen   int64
+
+	// Source identity (migration 003). Insert-only on upsert: the first
+	// ingest of a session fixes them, later chunks cannot rewrite them.
+	RawCwd                string
+	ProjectKey            string
+	IsSubagent            bool
+	SourceParentSessionID string
+}
+
+// execer is satisfied by both *DB and *sql.Tx so a store method can run
+// inside a caller-owned transaction or on its own.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 // SessionMemoryStore manages memory_sessions rows. Companion to MessageStore.
@@ -32,8 +52,9 @@ func NewSessionMemoryStore(db *DB) *SessionMemoryStore {
 const upsertSessionSQL = `
 INSERT INTO memory_sessions
     (session_id, user_id, project_dir, file_path, file_mtime, indexed_at,
-     last_seen_at, custom_title, platform, bytes_seen)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     last_seen_at, custom_title, platform, bytes_seen,
+     raw_cwd, project_key, is_subagent, source_parent_session_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     file_mtime   = excluded.file_mtime,
     last_seen_at = excluded.last_seen_at,
@@ -43,15 +64,77 @@ ON CONFLICT(session_id) DO UPDATE SET
 
 // Upsert is idempotent on session_id. On conflict it advances mtime/seen/bytes
 // and preserves a previously-set CustomTitle when the incoming value is empty.
-// user_id, project_dir, file_path, indexed_at, and platform are insert-only —
-// changing them retroactively would silently rewrite history.
+// user_id, project_dir, file_path, indexed_at, platform, and the source
+// identity columns are insert-only — changing them retroactively would
+// silently rewrite history.
 func (s *SessionMemoryStore) Upsert(m *MemorySession) error {
-	_, err := s.db.Exec(upsertSessionSQL,
+	return s.upsert(s.db, m)
+}
+
+// UpsertTx is Upsert inside a caller-owned transaction (see Service.Ingest).
+func (s *SessionMemoryStore) UpsertTx(tx *sql.Tx, m *MemorySession) error {
+	return s.upsert(tx, m)
+}
+
+func (s *SessionMemoryStore) upsert(e execer, m *MemorySession) error {
+	_, err := e.Exec(upsertSessionSQL,
 		m.SessionID, m.UserID, m.ProjectDir, m.FilePath, m.FileMtime,
 		m.IndexedAt, m.LastSeenAt, nullableString(m.CustomTitle), m.Platform, m.BytesSeen,
+		nullableString(m.RawCwd), nullableString(m.ProjectKey), m.IsSubagent,
+		nullableString(m.SourceParentSessionID),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
+	}
+	return nil
+}
+
+// Owner returns the user_id that owns sessionID and whether the session
+// exists. It reads one indexed column — use it for authorization instead of
+// loading the session's messages.
+func (s *SessionMemoryStore) Owner(sessionID string) (string, bool, error) {
+	return s.owner(s.db, sessionID)
+}
+
+// OwnerTx is Owner inside a caller-owned transaction, so an ingest can check
+// ownership and write atomically.
+func (s *SessionMemoryStore) OwnerTx(tx *sql.Tx, sessionID string) (string, bool, error) {
+	return s.owner(tx, sessionID)
+}
+
+func (s *SessionMemoryStore) owner(e execer, sessionID string) (string, bool, error) {
+	var owner string
+	err := e.QueryRow(`SELECT user_id FROM memory_sessions WHERE session_id = ?`, sessionID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("session owner: %w", err)
+	}
+	return owner, true, nil
+}
+
+// RecordIngestTx stamps the server-side receipt time, advances
+// last_activity_at to the newest parsed message timestamp (never backwards),
+// and replaces the client counters blob when one was sent. Runs in the
+// ingest transaction so a session row never claims an ingest whose messages
+// were rolled back.
+func (s *SessionMemoryStore) RecordIngestTx(tx *sql.Tx, sessionID string, ingestedAt float64, activityAt *float64, countersJSON string) error {
+	var activity any
+	if activityAt != nil {
+		activity = *activityAt
+	}
+	_, err := tx.Exec(`
+UPDATE memory_sessions
+SET last_ingested_at = ?,
+    last_activity_at = CASE
+        WHEN ? IS NULL THEN last_activity_at
+        ELSE MAX(COALESCE(last_activity_at, 0), ?)
+    END,
+    client_counters = COALESCE(?, client_counters)
+WHERE session_id = ?`, ingestedAt, activity, activity, nullableString(countersJSON), sessionID)
+	if err != nil {
+		return fmt.Errorf("record ingest: %w", err)
 	}
 	return nil
 }

@@ -88,6 +88,12 @@ func (h *MemoryHandlers) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.svc.Ingest(userID, &req)
 	if err != nil {
 		slog.Warn("memory ingest", "user", userID, "session", req.SessionID, "err", err)
+		// A session_id already owned by another user is a permanent conflict
+		// for these bytes: the watcher must stop retrying them (409, not 5xx).
+		if errors.Is(err, store.ErrForeignSession) {
+			http.Error(w, "session belongs to another user", http.StatusConflict)
+			return
+		}
 		// User-input validation errors render as 400; storage errors as 500.
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -314,10 +320,15 @@ func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ownership check — fetch session and confirm user_id matches. Return
+	// Ownership check on one indexed column — never load the session's
+	// messages just to authorize (a Codex session can be 50 MB). Return
 	// 404 (not 403) for foreign sessions to avoid leaking existence.
-	sess, _, err := h.svc.GetSessionWithMessages(userID, req.SessionID, 0)
-	if err != nil || sess == nil {
+	owned, err := h.svc.SessionOwnedBy(userID, req.SessionID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !owned {
 		http.NotFound(w, r)
 		return
 	}
