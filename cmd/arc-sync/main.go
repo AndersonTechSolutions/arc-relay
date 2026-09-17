@@ -1862,12 +1862,22 @@ func runMemoryExtract() {
 		os.Exit(2)
 	}
 
+	// Manual mode skips the relay's age/platform/quiet gates (not the
+	// subagent rule) and is best-effort across relay restarts: if the relay
+	// restarts before the pass runs, cron will only pick the session up if
+	// it passes the automatic gate.
 	sessionID := os.Args[3]
-	if err := w.PostExtract(sessionID); err != nil {
+	res, err := w.PostExtractMode(sessionID, sync.ExtractModeManual)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "extract:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("extraction triggered for session %s\n", sessionID)
+	if res.Queued {
+		fmt.Printf("extraction queued for session %s (mode=%s)\n", sessionID, res.Mode)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "extraction NOT queued for session %s: %s\n", sessionID, res.Reason)
+	os.Exit(1)
 }
 
 func runMemorySearch() {
@@ -1995,15 +2005,22 @@ func runMemoryWatch() {
 		StatePath:  filepath.Join(configDir, "memory_state.json"),
 		FlagPath:   filepath.Join(configDir, "wakeup.flag"),
 		HTTPClient: &http.Client{Timeout: 60 * time.Second},
-		// Phase B: 60s of mtime quiescence after a successful ingest signals
-		// "session ended" and triggers a POST /api/memory/extract. The cron
-		// loop on the relay backstops anything missed.
-		QuiescenceWindow: 60 * time.Second,
+		// Phase B: quiescence after a successful ingest signals "session
+		// ended" and triggers a POST /api/memory/extract. 75 s, not 60: the
+		// relay's own quiet gate is 60 s since last_ingested_at, so a 60 s
+		// timer would race it by milliseconds. The cron loop on the relay
+		// backstops anything missed.
+		QuiescenceWindow: 75 * time.Second,
 	}
 	once := false
 	for _, a := range os.Args[3:] {
-		if a == "--once" {
+		switch a {
+		case "--once":
 			once = true
+		case "--reset-state":
+			// Discard an unreadable/unknown-version state file and start
+			// from empty. Every transcript is re-sent; the relay deduplicates.
+			w.ResetState = true
 		}
 	}
 	if once {

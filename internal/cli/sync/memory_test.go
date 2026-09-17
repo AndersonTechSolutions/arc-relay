@@ -72,8 +72,8 @@ func TestMemoryWatcher_RunOnceIngestsDelta(t *testing.T) {
 		t.Fatalf("jsonl body mismatch: %q", got.JSONL)
 	}
 
-	// Verify watermark file was written
-	stateData, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	// Verify the v2 watermark file was written (v1 path is never created).
+	stateData, err := os.ReadFile(filepath.Join(dir, "state.v2.json"))
 	if err != nil {
 		t.Fatalf("reading state: %v", err)
 	}
@@ -81,9 +81,15 @@ func TestMemoryWatcher_RunOnceIngestsDelta(t *testing.T) {
 	if err := json.Unmarshal(stateData, &st); err != nil {
 		t.Fatalf("parsing state: %v", err)
 	}
-	fs := st.Files[jsonlPath]
+	if st.Version != stateVersion {
+		t.Fatalf("state version = %d, want %d", st.Version, stateVersion)
+	}
+	fs := st.files("claude-code")[jsonlPath]
 	if fs == nil || fs.BytesSeen == 0 {
 		t.Fatalf("watermark not written after successful POST")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy v1 state file must not be written by a v2 watcher")
 	}
 }
 
@@ -137,23 +143,28 @@ func TestMemoryWatcher_HTTPFailureDoesNotAdvanceWatermark(t *testing.T) {
 	_ = w.RunOnce()
 
 	// Watermark should NOT have advanced
-	st := w.loadState()
-	for path, fs := range st.Files {
+	st, err := w.loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, fs := range st.files("claude-code") {
 		if fs.BytesSeen != 0 {
 			t.Fatalf("watermark advanced on failure: %s = %d", path, fs.BytesSeen)
 		}
 	}
 }
 
-func TestMemoryWatcher_CorruptStateFileResetsCleanly(t *testing.T) {
+// A corrupt state file used to be silently reset, which replayed every
+// transcript from byte 0. Now the watcher refuses to start unless told to
+// reset explicitly.
+func TestMemoryWatcher_CorruptStateRefusesUnlessReset(t *testing.T) {
 	dir := t.TempDir()
 	pd := filepath.Join(dir, "p", "-x")
 	_ = os.MkdirAll(pd, 0o755)
 	_ = os.WriteFile(filepath.Join(pd, "s1.jsonl"), []byte("{}\n"), 0o644)
 
 	statePath := filepath.Join(dir, "state.json")
-	// Pre-write a corrupted state file
-	_ = os.WriteFile(statePath, []byte("{not json"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "state.v2.json"), []byte("{not json"), 0o600)
 
 	var posts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -171,13 +182,25 @@ func TestMemoryWatcher_CorruptStateFileResetsCleanly(t *testing.T) {
 		StatePath:  statePath,
 		HTTPClient: server.Client(),
 	}
-	if err := w.RunOnce(); err != nil {
-		t.Fatalf("run once: %v", err)
+	if err := w.RunOnce(); err == nil || !strings.Contains(err.Error(), "--reset-state") {
+		t.Fatalf("corrupt state: err = %v, want a refusal mentioning --reset-state", err)
 	}
-	// We don't assert post count beyond "no crash" — the test's value is
-	// proving the watcher recovers from corrupt state without panicking.
+	if posts != 0 {
+		t.Fatalf("watcher posted %d times despite refusing to start", posts)
+	}
+
+	// Same for an unknown version.
+	_ = os.WriteFile(filepath.Join(dir, "state.v2.json"), []byte(`{"version":9,"sources":{}}`), 0o600)
+	if err := w.RunOnce(); err == nil {
+		t.Fatal("unknown state version must refuse to start")
+	}
+
+	w.ResetState = true
+	if err := w.RunOnce(); err != nil {
+		t.Fatalf("run once with --reset-state: %v", err)
+	}
 	if posts < 1 {
-		t.Fatalf("expected at least 1 POST after recovery, got %d", posts)
+		t.Fatalf("expected at least 1 POST after reset, got %d", posts)
 	}
 }
 
@@ -254,12 +277,22 @@ func writeTranscript(t *testing.T, root string, n int) (string, []byte) {
 	return path, buf
 }
 
+// readWatermark reads the v2 state next to statePath (the legacy v1 path the
+// watcher is configured with) and returns filePath's watermark.
 func readWatermark(t *testing.T, statePath, filePath string) int64 {
 	t.Helper()
-	b, err := os.ReadFile(statePath)
+	if fs := readFileState(t, statePath, filePath); fs != nil {
+		return fs.BytesSeen
+	}
+	return 0
+}
+
+func readFileState(t *testing.T, statePath, filePath string) *fileState {
+	t.Helper()
+	b, err := os.ReadFile(strings.TrimSuffix(statePath, ".json") + ".v2.json")
 	if os.IsNotExist(err) {
 		// Nothing was ever committed — an unwritten state file means watermark 0.
-		return 0
+		return nil
 	}
 	if err != nil {
 		t.Fatalf("read state: %v", err)
@@ -268,10 +301,7 @@ func readWatermark(t *testing.T, statePath, filePath string) int64 {
 	if err := json.Unmarshal(b, &st); err != nil {
 		t.Fatalf("decode state: %v", err)
 	}
-	if fs := st.Files[filePath]; fs != nil {
-		return fs.BytesSeen
-	}
-	return 0
+	return st.files("claude-code")[filePath]
 }
 
 // A delta larger than the chunk limit must be split across several POSTs, each
