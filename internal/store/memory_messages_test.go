@@ -47,7 +47,7 @@ func TestMessageStore_InsertAndSearch(t *testing.T) {
 		{SessionID: "sess-1", Role: "user", Timestamp: "2026-04-26T12:00:02Z",
 			Content: "Unrelated question about deploys."},
 	}
-	if err := messages.BulkInsert(msgs); err != nil {
+	if _, err := messages.BulkInsert(msgs); err != nil {
 		t.Fatalf("bulk insert: %v", err)
 	}
 	for _, m := range msgs {
@@ -77,7 +77,7 @@ func TestMessageStore_InsertAndSearch(t *testing.T) {
 func TestMessageStore_RegexFallback(t *testing.T) {
 	db, messages := newMessageTestDB(t)
 	seedTestSession(t, db, "s", "ian")
-	_ = messages.BulkInsert([]*Message{
+	_, _ = messages.BulkInsert([]*Message{
 		{SessionID: "s", Role: "user", Timestamp: "t1", Content: "deploy to staging"},
 		{SessionID: "s", Role: "user", Timestamp: "t2", Content: "deploy to prod"},
 		{SessionID: "s", Role: "user", Timestamp: "t3", Content: "no match here"},
@@ -95,7 +95,7 @@ func TestMessageStore_RegexFallback(t *testing.T) {
 func TestMessageStore_GetSession(t *testing.T) {
 	db, messages := newMessageTestDB(t)
 	seedTestSession(t, db, "s", "ian")
-	_ = messages.BulkInsert([]*Message{
+	_, _ = messages.BulkInsert([]*Message{
 		{SessionID: "s", Role: "user", Timestamp: "t1", Epoch: 0, Content: "a"},
 		{SessionID: "s", Role: "user", Timestamp: "t2", Epoch: 1, Content: "b"},
 	})
@@ -117,7 +117,7 @@ func TestMessageStore_SearchProjectFilter(t *testing.T) {
 	// Override s2's project_dir to be different
 	_, _ = db.Exec(`UPDATE memory_sessions SET project_dir = ? WHERE session_id = ?`, "/other-project", "s2")
 
-	_ = messages.BulkInsert([]*Message{
+	_, _ = messages.BulkInsert([]*Message{
 		{SessionID: "s1", Role: "user", Timestamp: "t", Content: "FTS5 query"},
 		{SessionID: "s2", Role: "user", Timestamp: "t", Content: "FTS5 query"},
 	})

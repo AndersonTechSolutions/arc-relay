@@ -83,14 +83,16 @@ func (s *Service) Ingest(userID string, req *IngestRequest) (*IngestResponse, er
 	}
 	for _, m := range msgs {
 		m.SessionID = req.SessionID
+		m.Platform = req.Platform
 	}
-	if err := s.messages.BulkInsert(msgs); err != nil {
+	stored, err := s.messages.BulkInsert(msgs)
+	if err != nil {
 		return nil, fmt.Errorf("bulk insert: %w", err)
 	}
 	// CompactEvents persistence is Phase 4 (LLM observation layer). v1 returns
 	// the count for diagnostics but does not write a memory_compact_events row.
 	return &IngestResponse{
-		MessagesAdded: len(msgs),
+		MessagesAdded: stored,
 		EventsAdded:   len(events),
 		BytesSeen:     req.BytesSeen,
 	}, nil

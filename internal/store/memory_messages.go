@@ -17,6 +17,7 @@ type Message struct {
 	Timestamp  string
 	Role       string
 	Content    string
+	Platform   string // denormalized from memory_sessions.platform; "" → 'claude-code'
 }
 
 // SearchHit is one search result row.
@@ -45,56 +46,92 @@ func NewMessageStore(db *DB) *MessageStore {
 	return &MessageStore{db: db}
 }
 
+// insertMessageSQL is idempotent per session: a row whose (session_id, uuid)
+// already exists is silently dropped (unique index from migration 003). Rows
+// with a NULL uuid are never deduplicated — SQLite treats NULLs as distinct.
 const insertMessageSQL = `
 INSERT INTO memory_messages
-    (uuid, session_id, parent_uuid, epoch, timestamp, role, content)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+    (uuid, session_id, parent_uuid, epoch, timestamp, role, content, platform)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(session_id, uuid) DO NOTHING
 `
 
+func messagePlatform(m *Message) string {
+	if m.Platform == "" {
+		return "claude-code"
+	}
+	return m.Platform
+}
+
 // Insert inserts a single message and populates m.ID from LastInsertId.
-func (s *MessageStore) Insert(m *Message) error {
+// Returns false (and leaves m.ID at 0) when the row was a duplicate.
+func (s *MessageStore) Insert(m *Message) (bool, error) {
 	res, err := s.db.Exec(insertMessageSQL,
 		nullableString(m.UUID), m.SessionID, nullableString(m.ParentUUID),
-		m.Epoch, m.Timestamp, m.Role, m.Content,
+		m.Epoch, m.Timestamp, m.Role, m.Content, messagePlatform(m),
 	)
 	if err != nil {
-		return fmt.Errorf("insert message: %w", err)
+		return false, fmt.Errorf("insert message: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, nil
 	}
 	id, _ := res.LastInsertId()
 	m.ID = id
-	return nil
+	return true, nil
 }
 
-// BulkInsert inserts all messages in a single transaction.
-// Rolls back on any insert failure; populates each m.ID on success.
-func (s *MessageStore) BulkInsert(msgs []*Message) error {
+// BulkInsert inserts all messages in a single transaction and returns how
+// many rows were actually stored (duplicates are skipped, not counted).
+// Rolls back on any insert failure; populates m.ID on each stored row.
+func (s *MessageStore) BulkInsert(msgs []*Message) (int, error) {
 	if len(msgs) == 0 {
-		return nil
+		return 0, nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	n, err := s.BulkInsertTx(tx, msgs)
+	if err != nil {
+		return 0, err
+	}
+	return n, tx.Commit()
+}
+
+// BulkInsertTx is BulkInsert inside a caller-owned transaction, so ingest can
+// commit the session upsert and its messages atomically. The caller commits
+// or rolls back; on error nothing has been committed.
+func (s *MessageStore) BulkInsertTx(tx *sql.Tx, msgs []*Message) (int, error) {
+	if len(msgs) == 0 {
+		return 0, nil
+	}
 	stmt, err := tx.Prepare(insertMessageSQL)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = stmt.Close() }()
 
+	stored := 0
 	for _, m := range msgs {
 		res, err := stmt.Exec(
 			nullableString(m.UUID), m.SessionID, nullableString(m.ParentUUID),
-			m.Epoch, m.Timestamp, m.Role, m.Content,
+			m.Epoch, m.Timestamp, m.Role, m.Content, messagePlatform(m),
 		)
 		if err != nil {
-			return fmt.Errorf("bulk insert: %w", err)
+			return 0, fmt.Errorf("bulk insert: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue // duplicate (session_id, uuid): skipped by ON CONFLICT
 		}
 		id, _ := res.LastInsertId()
 		m.ID = id
+		stored++
 	}
-	return tx.Commit()
+	return stored, nil
 }
 
 // Search runs an FTS5 BM25 query scoped to userID.
