@@ -298,6 +298,8 @@ Not implemented in this spec. When there is real Cursor usage, the design must a
 
 ## 6. Rollout (strict order: relay first, then clients, then gates)
 
+**Status (2026-09-17):** PR-0a merged (#8) and deployed 13:30Z; migration 003 verified in production. PR-0b merged and released as the arc-sync CLI. PR-1 and PR-2 are **paused**: the memory pipeline may move off arc-sync to a different service, so Phase 3a is not scheduled. Cursor (Phase 3b) remains deferred.
+
 1. **PR-0a (relay):** P0-S1…S5 + migration 003. Dry run on a DB copy (with the three measured durations + the FTS preflight), restart-policy check, then the maintenance procedure (§4.1), deploy (`komodo execute RunBuild` + `DeployStackService`), and verification. `ARC_RELAY_EXTRACT_PLATFORMS=claude-code`.
 2. **PR-0b (arc-sync):** P0-W1…W3. Self-update Mac + Mint. Verify v2 import + lock; `last_ingested_at` advances; forced `--once` replay adds 0 rows. **PR-0b must be on every client before PR-2 Stage B** (old clients send no `mode`, which defaults to `auto` and is gated — safe, but their quiescence triggers are silently ineligible until then).
 3. **PR-1 (arc-sync):** `Source` interface, `claudeCodeSource`, project resolver. Golden tests.
