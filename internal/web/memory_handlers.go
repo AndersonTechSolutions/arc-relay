@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/memory/extractor"
@@ -273,6 +272,9 @@ func (h *MemoryHandlers) HandleStats(w http.ResponseWriter, r *http.Request) {
 // SessionID is required and must belong to the authenticated user.
 type runExtractionRequest struct {
 	SessionID string `json:"session_id"`
+	// Mode is "auto" (default, gated) or "manual" (skips age/platform/quiet
+	// gates; `arc-sync memory extract <id>` sends it).
+	Mode string `json:"mode,omitempty"`
 }
 
 // HandleExtract kicks off LLM extraction on one session. Wired at
@@ -333,33 +335,24 @@ func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detach from request context so a client disconnect (CF 524, watcher
-	// goes away) doesn't cancel a multi-minute extraction. The per-session
-	// mutex inside extractor.Extract serializes if a duplicate request
-	// arrives.
-	// #nosec G118 -- deliberate: the handler returns 202 immediately, so the
-	// request context is cancelled the moment the response is written and
-	// would kill a multi-minute extraction. Bounded instead by an explicit
-	// 30-minute timeout.
-	go func(sid, uid string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		res, err := h.extractor.Extract(ctx, sid)
-		if err != nil {
-			slog.Error("async extraction failed", "session", sid, "user", uid, "err", err)
-			return
-		}
-		slog.Info("async extraction complete",
-			"session", sid,
-			"user", uid,
-			"chunks", res.ChunksProcessed,
-			"mems", res.MemoriesCreated,
-			"errors", len(res.Errors))
-	}(req.SessionID, userID)
+	// Every extraction goes through the admission queue: automatic requests
+	// (the default when mode is absent, which is what every pre-Phase-0
+	// client sends) must pass the eligibility gate; manual ones skip the
+	// age/platform/quiet gates but never the subagent rule. 202 always
+	// carries `queued` + `reason` so the operator can see a rejected request
+	// instead of a silent no-op.
+	mode := extractor.ModeAuto
+	if req.Mode == string(extractor.ModeManual) {
+		mode = extractor.ModeManual
+	}
+	queued, reason := h.extractor.Enqueue(req.SessionID, mode)
+	slog.Info("extraction requested",
+		"session", req.SessionID, "user", userID, "mode", mode, "queued", queued, "reason", reason)
 
 	writeMemoryJSON(w, http.StatusAccepted, map[string]any{
 		"session_id": req.SessionID,
-		"status":     "accepted",
-		"note":       "Extraction running asynchronously. Watch the relay log or query memory_extractions for completion.",
+		"mode":       string(mode),
+		"queued":     queued,
+		"reason":     reason,
 	})
 }

@@ -6,17 +6,13 @@ import (
 	"time"
 )
 
-// RunCron starts the periodic backstop loop. Every `interval`, the loop
-// asks the session store for stale sessions (last_seen_at >1h ago AND
-// last_extracted_at NULL or behind last_seen_at) and runs Extract on each.
+// RunCron is the periodic backstop. Every `interval` it enqueues up to
+// cronBatchSize sessions that pass the automatic eligibility gate, least
+// recently attempted first, and prunes old failure rows. It never extracts
+// directly: the queue is the only path, so the worker pool and the call-rate
+// limit bound cron and watcher-triggered work together.
 //
-// This is the safety net for sessions where the watcher quiescence push
-// never fired (machine sleep, crash, network drop). The cron's 1-hour
-// staleness threshold deliberately doesn't compete with the watcher's 60s
-// quiescence path — sessions extract via the watcher first, cron only
-// catches strays.
-//
-// Returns when ctx is canceled. Each cycle's outcome is logged at INFO.
+// Returns when ctx is canceled.
 func (s *Service) RunCron(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 30 * time.Minute
@@ -31,47 +27,48 @@ func (s *Service) RunCron(ctx context.Context, interval time.Duration) {
 			slog.Info("extractor cron loop stopped")
 			return
 		case <-t.C:
-			s.cronCycle(ctx)
+			s.cronCycle()
 		}
 	}
 }
 
-const cronBatchSize = 50
+const (
+	cronBatchSize     = 50
+	errorRowRetention = 30 * 24 * time.Hour
+)
 
-// cronCycle pulls one batch of stale sessions and extracts each. Errors are
-// logged but don't abort the cycle — one bad session shouldn't block others.
-func (s *Service) cronCycle(ctx context.Context) {
-	start := time.Now()
-	sessions, err := s.sessions.ListStaleForExtraction(cronBatchSize)
+// cronCycle enqueues one batch of eligible sessions. Without a running queue
+// (the service is configured but StartQueue was never called) it logs and
+// does nothing rather than extracting outside the admission path.
+func (s *Service) cronCycle() {
+	if s.queue == nil {
+		slog.Warn("cron: extraction queue not running; skipping cycle")
+		return
+	}
+	start := s.now()
+	now := float64(start.UnixNano()) / 1e9
+	sessions, err := s.sessions.ListEligibleForAutoExtraction(now, s.queue.cfg.Eligibility, cronBatchSize)
 	if err != nil {
-		slog.Error("cron: list stale failed", "err", err)
-		return
-	}
-	if len(sessions) == 0 {
-		slog.Debug("cron cycle: no stale sessions")
+		slog.Error("cron: list eligible failed", "err", err)
 		return
 	}
 
-	var ok, fail int
+	var queued, skipped int
 	for _, sid := range sessions {
-		// Per-session timeout via context — Extract uses its own per-call
-		// timeout (180s) per chunk plus one retry on transient errors; this
-		// is just a circuit breaker on the whole extraction flow. 15 min
-		// fits a 30-chunk session at worst-case 30s/chunk with retries.
-		callCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
-		_, err := s.Extract(callCtx, sid)
-		cancel()
-		if err != nil {
-			slog.Error("cron: extract failed", "session", sid, "err", err)
-			fail++
+		if ok, _ := s.queue.Enqueue(sid, ModeAuto); ok {
+			queued++
 		} else {
-			ok++
+			skipped++
 		}
 	}
 
+	pruned, err := s.extractions.PruneErrors(now - errorRowRetention.Seconds())
+	if err != nil {
+		slog.Warn("cron: prune error rows failed", "err", err)
+	}
+
 	slog.Info("cron cycle complete",
-		"picked", len(sessions),
-		"ok", ok,
-		"fail", fail,
+		"eligible", len(sessions), "queued", queued, "skipped", skipped,
+		"pruned_error_rows", pruned,
 		"ms", time.Since(start).Milliseconds())
 }

@@ -144,12 +144,15 @@ WHERE session_id = ?`, ingestedAt, activity, activity, nullableString(countersJS
 func (s *SessionMemoryStore) Get(sessionID string) (*MemorySession, error) {
 	row := s.db.QueryRow(`
 SELECT session_id, user_id, project_dir, file_path, file_mtime, indexed_at,
-       last_seen_at, COALESCE(custom_title, ''), platform, bytes_seen
+       last_seen_at, COALESCE(custom_title, ''), platform, bytes_seen,
+       COALESCE(raw_cwd, ''), COALESCE(project_key, ''), is_subagent,
+       COALESCE(source_parent_session_id, '')
 FROM memory_sessions WHERE session_id = ?`, sessionID)
 	var m MemorySession
 	err := row.Scan(&m.SessionID, &m.UserID, &m.ProjectDir, &m.FilePath,
 		&m.FileMtime, &m.IndexedAt, &m.LastSeenAt, &m.CustomTitle,
-		&m.Platform, &m.BytesSeen)
+		&m.Platform, &m.BytesSeen, &m.RawCwd, &m.ProjectKey, &m.IsSubagent,
+		&m.SourceParentSessionID)
 	if err != nil {
 		return nil, err // do not wrap so errors.Is(err, sql.ErrNoRows) works
 	}
