@@ -506,3 +506,20 @@ func TestMaxIngestChunkFitsRelayBodyLimit(t *testing.T) {
 			maxIngestChunk, encoded, relayBodyLimit)
 	}
 }
+
+func TestSubagentParent(t *testing.T) {
+	cases := []struct {
+		path, parent, proj string
+		ok                 bool
+	}{
+		{"/h/.claude/projects/-home-dev-app/b6a66ba7/subagents/agent-a62.jsonl", "b6a66ba7", "-home-dev-app", true},
+		{"/h/.claude/projects/-home-dev-app/b6a66ba7.jsonl", "", "", false},
+		{"/h/.claude/projects/-home-dev-subagents/s1.jsonl", "", "", false}, // project merely named like it
+	}
+	for _, c := range cases {
+		parent, proj, ok := subagentParent(c.path)
+		if parent != c.parent || proj != c.proj || ok != c.ok {
+			t.Errorf("subagentParent(%q) = %q, %q, %v; want %q, %q, %v", c.path, parent, proj, ok, c.parent, c.proj, c.ok)
+		}
+	}
+}
