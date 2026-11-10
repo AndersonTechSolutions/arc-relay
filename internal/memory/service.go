@@ -127,7 +127,7 @@ func (s *Service) Ingest(userID string, req *IngestRequest) (*IngestResponse, er
 		BytesSeen:             req.BytesSeen,
 		RawCwd:                req.RawCwd,
 		ProjectKey:            req.ProjectKey,
-		IsSubagent:            req.IsSubagent,
+		IsSubagent:            req.IsSubagent || isSubagentPath(req.FilePath),
 		SourceParentSessionID: req.SourceParentSessionID,
 	}); err != nil {
 		return nil, fmt.Errorf("upsert session: %w", err)
@@ -417,4 +417,14 @@ func hasRegexMeta(q string) bool {
 		}
 	}
 	return false
+}
+
+// isSubagentPath reports whether p is a Claude Code subagent transcript
+// (<project>/<parent-session>/subagents/agent-*.jsonl). Older watchers never
+// sent is_subagent, so the relay also infers it from the path — otherwise the
+// auto-extract gate admits every subagent session into mem0.
+func isSubagentPath(p string) bool {
+	p = strings.ReplaceAll(p, `\`, "/")
+	i := strings.LastIndex(p, "/")
+	return i > 0 && strings.HasSuffix(p[:i], "/subagents")
 }

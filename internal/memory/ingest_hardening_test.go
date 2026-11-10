@@ -150,3 +150,31 @@ func TestParseTimestamp(t *testing.T) {
 		}
 	}
 }
+
+// Older watchers never send is_subagent; the relay must infer it from the path
+// so the auto-extract gate skips subagent sessions.
+func TestIngest_InfersSubagentFromPath(t *testing.T) {
+	svc, _ := newServiceTestRig(t)
+	cases := []struct {
+		id, path string
+		want     int
+	}{
+		{"sub", "/h/.claude/projects/-home-dev-app/parent/subagents/agent-a1.jsonl", 1},
+		{"win", `C:\Users\i\.claude\projects\C--app\parent\subagents\agent-a2.jsonl`, 1},
+		{"top", "/h/.claude/projects/-home-dev-app/top.jsonl", 0},
+	}
+	for _, c := range cases {
+		req := ingestReq(c.id, chunk(c.id, [2]string{c.id + "-a", "2026-11-10T04:00:00Z"}))
+		req.FilePath = c.path
+		if _, err := svc.Ingest("ian", req); err != nil {
+			t.Fatal(err)
+		}
+		var got int
+		if err := svc.messages.DB().QueryRow(`SELECT is_subagent FROM memory_sessions WHERE session_id=?`, c.id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("%s: is_subagent = %d, want %d", c.path, got, c.want)
+		}
+	}
+}

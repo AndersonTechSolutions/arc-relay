@@ -156,6 +156,8 @@ type ingestRequest struct {
 	Platform       string           `json:"platform"`
 	JSONL          []byte           `json:"jsonl"` // base64-encoded by Go's encoding/json automatically
 	RawCwd         string           `json:"raw_cwd,omitempty"`
+	IsSubagent     bool             `json:"is_subagent,omitempty"`
+	SourceParent   string           `json:"source_parent_session_id,omitempty"`
 	ClientCounters map[string]int64 `json:"client_counters,omitempty"`
 }
 
@@ -521,6 +523,9 @@ func (w *MemoryWatcher) drainFile(st *stateFile, fs *fileState, path string, siz
 func (w *MemoryWatcher) ingestDelta(st *stateFile, fs *fileState, path string, delta []byte, mtime float64) (bool, error) {
 	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	projectDir := decodeProjectDir(filepath.Base(filepath.Dir(path)))
+	if _, projDir, ok := subagentParent(path); ok {
+		projectDir = decodeProjectDir(projDir) // not "/subagents"
+	}
 	base := fs.BytesSeen
 	messagesAdded := 0
 	advanced := false
@@ -569,6 +574,7 @@ func (w *MemoryWatcher) ingestDelta(st *stateFile, fs *fileState, path string, d
 // halves; a single record that is still too large is skipped and counted.
 // 409 quarantines the file: the session belongs to another relay user.
 func (w *MemoryWatcher) sendUnit(fs *fileState, path, sessionID, projectDir string, unit []byte, off int64, mtime float64) (bool, int) {
+	parent, _, isSubagent := subagentParent(path)
 	body, _ := json.Marshal(&ingestRequest{
 		SessionID:      sessionID,
 		ProjectDir:     projectDir,
@@ -578,6 +584,8 @@ func (w *MemoryWatcher) sendUnit(fs *fileState, path, sessionID, projectDir stri
 		Platform:       w.platform(),
 		JSONL:          unit,
 		RawCwd:         fs.RawCwd,
+		IsSubagent:     isSubagent,
+		SourceParent:   parent,
 		ClientCounters: fs.Counters,
 	})
 	resp, err := w.postIngest(body)
@@ -872,6 +880,19 @@ func readRawCwd(path string) string {
 		}
 	}
 	return ""
+}
+
+// subagentParent reports whether path is a subagent transcript, which Claude
+// Code writes to <project>/<parent-session>/subagents/agent-*.jsonl, and
+// returns the parent session ID and the escaped project directory name.
+// The relay's auto-extract gate skips subagent sessions only when told.
+func subagentParent(path string) (parentSession, projectDirName string, ok bool) {
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) != "subagents" {
+		return "", "", false
+	}
+	session := filepath.Dir(dir)
+	return filepath.Base(session), filepath.Base(filepath.Dir(session)), true
 }
 
 // decodeProjectDir reverses Claude Code's `/` → `-` escaping in the project
